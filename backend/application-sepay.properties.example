@@ -1,0 +1,15 @@
+# Ví dụ cấu hình biến môi trường cho SePay Sandbox
+# Không commit khóa bí mật lên Git!
+# Thiết lập trên PowerShell trước khi chạy backend:
+#   $env:SEPAY_MERCHANT_ID="SP-TEST-XXXXXXX"
+#   $env:SEPAY_SECRET_KEY="spsk_test_xxxxxxxxxxxxxxxxxxxxxxxx"
+#   $env:SEPAY_IPN_SECRET="spis_test_xxxxxxxxxxxxxxxxxxxxxxxx"
+#   $env:APP_PUBLIC_URL="https://your-domain.ngrok-free.app"
+
+sepay.merchant-id=SP-TEST-XXXXXXX
+sepay.secret-key=spsk_test_xxxxxxxxxxxxxxxxxxxxxxxx
+sepay.ipn-secret=spis_test_xxxxxxxxxxxxxxxxxxxxxxxx
+sepay.app-public-url=https://your-domain.ngrok-free.app
+sepay.checkout-url=https://pay-sandbox.sepay.vn/v1/checkout/init
+sepay.query-api-url=https://pgapi-sandbox.sepay.vn
+

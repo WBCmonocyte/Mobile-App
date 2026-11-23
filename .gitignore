@@ -1,0 +1,22 @@
+*.iml
+.gradle/
+/local.properties
+local.properties
+.DS_Store
+Thumbs.db
+/build/
+app/build/
+/captures/
+.externalNativeBuild/
+.cxx/
+
+# IDE & OS files
+.idea/
+.vscode/
+*.log
+.kotlin/
+
+# Maven Backend build
+backend/target/
+
+.gradle-agent/
