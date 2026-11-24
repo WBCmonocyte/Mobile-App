@@ -4,12 +4,16 @@ import com.easysport.dto.ApiResponse;
 import com.easysport.entity.Booking;
 import com.easysport.entity.Court;
 import com.easysport.entity.CourtField;
+import com.easysport.entity.InventoryItem;
+import com.easysport.entity.InventoryTransaction;
 import com.easysport.entity.PosSale;
 import com.easysport.entity.ShiftReport;
 import com.easysport.entity.StaffShift;
 import com.easysport.entity.User;
 import com.easysport.repository.BookingRepository;
 import com.easysport.repository.CourtRepository;
+import com.easysport.repository.InventoryItemRepository;
+import com.easysport.repository.InventoryTransactionRepository;
 import com.easysport.repository.PosSaleRepository;
 import com.easysport.repository.ShiftReportRepository;
 import com.easysport.repository.StaffShiftRepository;
@@ -40,6 +44,8 @@ public class OwnerController {
     private final PosSaleRepository posSaleRepository;
     private final UserRepository userRepository;
     private final ShiftPlanningService shiftPlanningService;
+    private final InventoryItemRepository inventoryItemRepository;
+    private final InventoryTransactionRepository inventoryTransactionRepository;
     private final Clock clock;
 
     public OwnerController(AuthService authService,
@@ -50,6 +56,8 @@ public class OwnerController {
                            PosSaleRepository posSaleRepository,
                            UserRepository userRepository,
                            ShiftPlanningService shiftPlanningService,
+                           InventoryItemRepository inventoryItemRepository,
+                           InventoryTransactionRepository inventoryTransactionRepository,
                            Clock clock) {
         this.authService = authService;
         this.bookingRepository = bookingRepository;
@@ -59,6 +67,8 @@ public class OwnerController {
         this.posSaleRepository = posSaleRepository;
         this.userRepository = userRepository;
         this.shiftPlanningService = shiftPlanningService;
+        this.inventoryItemRepository = inventoryItemRepository;
+        this.inventoryTransactionRepository = inventoryTransactionRepository;
         this.clock = clock;
     }
 
@@ -705,6 +715,256 @@ public class OwnerController {
         m.put("lateCount", lateCount);
         m.put("earlyCount", earlyCount);
         m.put("totalHours", totalHours);
+        return m;
+    }
+
+    // ==================== QUẢN LÝ KHO HÀNG (INVENTORY) ====================
+
+    @GetMapping("/inventory")
+    public ResponseEntity<ApiResponse<Map<String, Object>>> getInventory(
+            @RequestHeader(value = "Authorization", required = false) String authHeader,
+            @RequestParam(required = false) String courtId
+    ) {
+        requireOwner(authHeader);
+        String filterCourt = courtId != null && !courtId.isBlank() && !"ALL".equalsIgnoreCase(courtId)
+                ? courtId.trim() : null;
+
+        List<InventoryItem> items = filterCourt != null
+                ? inventoryItemRepository.findByCourtIdAndActiveTrueOrderByNameAsc(filterCourt)
+                : inventoryItemRepository.findByActiveTrueOrderByCourtIdAscNameAsc();
+
+        List<InventoryTransaction> transactions = filterCourt != null
+                ? inventoryTransactionRepository.findTop50ByCourtIdOrderByCreatedAtDesc(filterCourt)
+                : inventoryTransactionRepository.findTop50ByOrderByCreatedAtDesc();
+
+        long lowStockCount = items.stream().filter(InventoryItem::isLowStock).count();
+        long totalValue = items.stream()
+                .mapToLong(i -> (long) i.getStockQuantity() * i.getImportPrice())
+                .sum();
+        int totalUnits = items.stream().mapToInt(InventoryItem::getStockQuantity).sum();
+
+        List<Map<String, Object>> itemMaps = new ArrayList<>();
+        for (InventoryItem item : items) {
+            itemMaps.add(toInventoryItemMap(item));
+        }
+        List<Map<String, Object>> txMaps = new ArrayList<>();
+        for (InventoryTransaction tx : transactions) {
+            txMaps.add(toInventoryTxMap(tx));
+        }
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("items", itemMaps);
+        result.put("transactions", txMaps);
+        result.put("totalItems", items.size());
+        result.put("totalUnits", totalUnits);
+        result.put("lowStockCount", lowStockCount);
+        result.put("totalStockValue", totalValue);
+
+        return ResponseEntity.ok(ApiResponse.success("Danh sách kho hàng", result));
+    }
+
+    @PostMapping("/inventory")
+    public ResponseEntity<ApiResponse<Map<String, Object>>> createInventoryItem(
+            @RequestHeader(value = "Authorization", required = false) String authHeader,
+            @RequestBody Map<String, Object> body
+    ) {
+        User owner = requireOwner(authHeader);
+        String name = String.valueOf(body.getOrDefault("name", "")).trim();
+        String courtId = String.valueOf(body.getOrDefault("courtId", "")).trim();
+        if (name.isEmpty() || courtId.isEmpty()) {
+            return ResponseEntity.badRequest().body(ApiResponse.error("Tên mặt hàng và chi nhánh không được để trống."));
+        }
+        Court court = courtRepository.findById(courtId).orElse(null);
+        if (court == null) {
+            return ResponseEntity.badRequest().body(ApiResponse.error("Không tìm thấy chi nhánh: " + courtId));
+        }
+
+        String category = String.valueOf(body.getOrDefault("category", "DRINK")).trim().toUpperCase();
+        String unit = String.valueOf(body.getOrDefault("unit", "chai")).trim();
+        int importPrice = ((Number) body.getOrDefault("importPrice", 0)).intValue();
+        int sellPrice = ((Number) body.getOrDefault("sellPrice", 0)).intValue();
+        int stockQuantity = ((Number) body.getOrDefault("stockQuantity", 0)).intValue();
+        int minAlert = ((Number) body.getOrDefault("minAlertThreshold", 10)).intValue();
+
+        if (sellPrice < 0 || importPrice < 0 || stockQuantity < 0) {
+            return ResponseEntity.badRequest().body(ApiResponse.error("Giá và số lượng tồn không được âm."));
+        }
+
+        String id = "inv_" + UUID.randomUUID().toString().substring(0, 8);
+        InventoryItem item = new InventoryItem(
+                id, court.getId(), court.getName(), name, category, unit,
+                importPrice, sellPrice, stockQuantity, minAlert
+        );
+        inventoryItemRepository.save(item);
+
+        if (stockQuantity > 0) {
+            InventoryTransaction tx = new InventoryTransaction(
+                    "tx_" + UUID.randomUUID().toString().substring(0, 8),
+                    item.getId(), item.getName(), item.getCourtId(),
+                    "IMPORT", stockQuantity, stockQuantity, importPrice,
+                    "Khởi tạo mặt hàng mới vào kho", owner.getFullName()
+            );
+            inventoryTransactionRepository.save(tx);
+        }
+
+        return ResponseEntity.ok(ApiResponse.success("Đã thêm mặt hàng vào kho", toInventoryItemMap(item)));
+    }
+
+    @PutMapping("/inventory/{id}")
+    public ResponseEntity<ApiResponse<Map<String, Object>>> updateInventoryItem(
+            @PathVariable String id,
+            @RequestHeader(value = "Authorization", required = false) String authHeader,
+            @RequestBody Map<String, Object> body
+    ) {
+        requireOwner(authHeader);
+        InventoryItem item = inventoryItemRepository.findById(id).orElse(null);
+        if (item == null || !Boolean.TRUE.equals(item.getActive())) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(ApiResponse.error("Không tìm thấy mặt hàng."));
+        }
+        if (body.containsKey("name")) {
+            String n = String.valueOf(body.get("name")).trim();
+            if (!n.isEmpty()) item.setName(n);
+        }
+        if (body.containsKey("category")) {
+            item.setCategory(String.valueOf(body.get("category")).trim().toUpperCase());
+        }
+        if (body.containsKey("unit")) {
+            item.setUnit(String.valueOf(body.get("unit")).trim());
+        }
+        if (body.containsKey("importPrice")) {
+            item.setImportPrice(Math.max(0, ((Number) body.get("importPrice")).intValue()));
+        }
+        if (body.containsKey("sellPrice")) {
+            item.setSellPrice(Math.max(0, ((Number) body.get("sellPrice")).intValue()));
+        }
+        if (body.containsKey("minAlertThreshold")) {
+            item.setMinAlertThreshold(Math.max(0, ((Number) body.get("minAlertThreshold")).intValue()));
+        }
+        item.setUpdatedAt(java.time.LocalDateTime.now(clock));
+        inventoryItemRepository.save(item);
+        return ResponseEntity.ok(ApiResponse.success("Đã cập nhật mặt hàng", toInventoryItemMap(item)));
+    }
+
+    @PostMapping("/inventory/{id}/restock")
+    public ResponseEntity<ApiResponse<Map<String, Object>>> restockInventoryItem(
+            @PathVariable String id,
+            @RequestHeader(value = "Authorization", required = false) String authHeader,
+            @RequestBody Map<String, Object> body
+    ) {
+        User owner = requireOwner(authHeader);
+        InventoryItem item = inventoryItemRepository.findById(id).orElse(null);
+        if (item == null || !Boolean.TRUE.equals(item.getActive())) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(ApiResponse.error("Không tìm thấy mặt hàng."));
+        }
+        int quantity = ((Number) body.getOrDefault("quantity", 0)).intValue();
+        if (quantity <= 0) {
+            return ResponseEntity.badRequest().body(ApiResponse.error("Số lượng nhập kho phải lớn hơn 0."));
+        }
+        int unitCost = body.containsKey("unitCost")
+                ? Math.max(0, ((Number) body.get("unitCost")).intValue())
+                : item.getImportPrice();
+        String note = String.valueOf(body.getOrDefault("note", "Nhập thêm hàng vào kho")).trim();
+
+        item.setStockQuantity(item.getStockQuantity() + quantity);
+        if (unitCost > 0) item.setImportPrice(unitCost);
+        item.setUpdatedAt(java.time.LocalDateTime.now(clock));
+        inventoryItemRepository.save(item);
+
+        InventoryTransaction tx = new InventoryTransaction(
+                "tx_" + UUID.randomUUID().toString().substring(0, 8),
+                item.getId(), item.getName(), item.getCourtId(),
+                "IMPORT", quantity, item.getStockQuantity(), unitCost,
+                note.isEmpty() ? "Nhập thêm hàng" : note, owner.getFullName()
+        );
+        inventoryTransactionRepository.save(tx);
+
+        return ResponseEntity.ok(ApiResponse.success(
+                "Đã nhập thêm " + quantity + " " + item.getUnit() + " " + item.getName(),
+                toInventoryItemMap(item)
+        ));
+    }
+
+    @PostMapping("/inventory/{id}/adjust")
+    public ResponseEntity<ApiResponse<Map<String, Object>>> adjustInventoryItem(
+            @PathVariable String id,
+            @RequestHeader(value = "Authorization", required = false) String authHeader,
+            @RequestBody Map<String, Object> body
+    ) {
+        User owner = requireOwner(authHeader);
+        InventoryItem item = inventoryItemRepository.findById(id).orElse(null);
+        if (item == null || !Boolean.TRUE.equals(item.getActive())) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(ApiResponse.error("Không tìm thấy mặt hàng."));
+        }
+        int newStock = ((Number) body.getOrDefault("newStock", item.getStockQuantity())).intValue();
+        if (newStock < 0) {
+            return ResponseEntity.badRequest().body(ApiResponse.error("Số lượng tồn mới không được âm."));
+        }
+        int delta = newStock - item.getStockQuantity();
+        String note = String.valueOf(body.getOrDefault("note", "Kiểm kê điều chỉnh tồn kho")).trim();
+
+        item.setStockQuantity(newStock);
+        item.setUpdatedAt(java.time.LocalDateTime.now(clock));
+        inventoryItemRepository.save(item);
+
+        if (delta != 0) {
+            InventoryTransaction tx = new InventoryTransaction(
+                    "tx_" + UUID.randomUUID().toString().substring(0, 8),
+                    item.getId(), item.getName(), item.getCourtId(),
+                    "ADJUST", delta, newStock, item.getImportPrice(),
+                    note.isEmpty() ? "Kiểm kê điều chỉnh" : note, owner.getFullName()
+            );
+            inventoryTransactionRepository.save(tx);
+        }
+
+        return ResponseEntity.ok(ApiResponse.success("Đã cập nhật kiểm kê kho", toInventoryItemMap(item)));
+    }
+
+    @DeleteMapping("/inventory/{id}")
+    public ResponseEntity<ApiResponse<String>> deleteInventoryItem(
+            @PathVariable String id,
+            @RequestHeader(value = "Authorization", required = false) String authHeader
+    ) {
+        requireOwner(authHeader);
+        InventoryItem item = inventoryItemRepository.findById(id).orElse(null);
+        if (item == null) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(ApiResponse.error("Không tìm thấy mặt hàng."));
+        }
+        item.setActive(false);
+        item.setUpdatedAt(java.time.LocalDateTime.now(clock));
+        inventoryItemRepository.save(item);
+        return ResponseEntity.ok(ApiResponse.success("Đã xóa mặt hàng khỏi kho", id));
+    }
+
+    private static Map<String, Object> toInventoryItemMap(InventoryItem item) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("id", item.getId());
+        m.put("courtId", item.getCourtId());
+        m.put("courtName", item.getCourtName());
+        m.put("name", item.getName());
+        m.put("category", item.getCategory());
+        m.put("unit", item.getUnit());
+        m.put("importPrice", item.getImportPrice());
+        m.put("sellPrice", item.getSellPrice());
+        m.put("stockQuantity", item.getStockQuantity());
+        m.put("minAlertThreshold", item.getMinAlertThreshold());
+        m.put("lowStock", item.isLowStock());
+        m.put("updatedAt", item.getUpdatedAt() != null ? item.getUpdatedAt().toString() : "");
+        return m;
+    }
+
+    private static Map<String, Object> toInventoryTxMap(InventoryTransaction tx) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("id", tx.getId());
+        m.put("itemId", tx.getItemId());
+        m.put("itemName", tx.getItemName());
+        m.put("courtId", tx.getCourtId());
+        m.put("type", tx.getType());
+        m.put("quantityDelta", tx.getQuantityDelta());
+        m.put("stockAfter", tx.getStockAfter());
+        m.put("unitCost", tx.getUnitCost());
+        m.put("note", tx.getNote() != null ? tx.getNote() : "");
+        m.put("createdBy", tx.getCreatedBy() != null ? tx.getCreatedBy() : "");
+        m.put("createdAt", tx.getCreatedAt() != null ? tx.getCreatedAt().toString() : "");
         return m;
     }
 

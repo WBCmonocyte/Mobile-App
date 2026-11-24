@@ -61,6 +61,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.easysport.data.model.Court
+import com.example.easysport.data.model.InventoryItemModel
+import com.example.easysport.data.model.PosOrderItemRequest
 import com.example.easysport.data.model.PosSaleItem
 import com.example.easysport.data.model.ShiftReportItem
 import com.example.easysport.data.model.StaffBookingItem
@@ -116,6 +118,7 @@ fun StaffDashboardScreen(
     var myReports by remember { mutableStateOf<List<ShiftReportItem>>(emptyList()) }
     var shiftSummary by remember { mutableStateOf<StaffShiftSummary?>(null) }
     var retailSales by remember { mutableStateOf<List<PosSaleItem>>(emptyList()) }
+    var inventoryItems by remember { mutableStateOf<List<InventoryItemModel>>(emptyList()) }
     var isRefreshing by remember { mutableStateOf(false) }
     var isSubmittingReport by remember { mutableStateOf(false) }
 
@@ -145,6 +148,7 @@ fun StaffDashboardScreen(
             StaffOwnerApiClient.getMyReports().onSuccess { myReports = it }
             StaffOwnerApiClient.getShiftSummary().onSuccess { shiftSummary = it }
             StaffOwnerApiClient.getMyRetailSales().onSuccess { retailSales = it }
+            StaffOwnerApiClient.getStaffInventory().onSuccess { inventoryItems = it }
             isRefreshing = false
         }
     }
@@ -302,7 +306,8 @@ fun StaffDashboardScreen(
                     assignedCourt = assignedCourt,
                     initialSelectedBookingId = posPreselectedBookingId,
                     retailSales = retailSales,
-                    onSubmitPos = { targetBookingId, note, amount, method, onReset ->
+                    inventoryItems = inventoryItems,
+                    onSubmitPos = { targetBookingId, note, amount, method, orderItems, onReset ->
                         if (currentShiftForContext == null || currentShiftForContext.status != "ACTIVE") {
                             showOutOfShiftDialog = true
                             return@StaffPosTab
@@ -318,7 +323,8 @@ fun StaffDashboardScreen(
                                         amount = amount,
                                         paymentMethod = "QR",
                                         courtId = assignedCourt?.id,
-                                        courtName = assignedCourt?.name
+                                        courtName = assignedCourt?.name,
+                                        items = orderItems
                                     ).onSuccess {
                                         onReset()
                                         Toast.makeText(
@@ -340,7 +346,8 @@ fun StaffDashboardScreen(
                                         amount = amount,
                                         paymentMethod = "CASH",
                                         courtId = assignedCourt?.id,
-                                        courtName = assignedCourt?.name
+                                        courtName = assignedCourt?.name,
+                                        items = orderItems
                                     ).onSuccess {
                                         onReset()
                                         Toast.makeText(
@@ -353,7 +360,7 @@ fun StaffDashboardScreen(
                                         Toast.makeText(context, it.message, Toast.LENGTH_SHORT).show()
                                     }
                                 } else {
-                                    StaffOwnerApiClient.addPosServices(targetBookingId, note, amount)
+                                    StaffOwnerApiClient.addPosServices(targetBookingId, note, amount, orderItems)
                                         .onSuccess {
                                             onReset()
                                             Toast.makeText(
@@ -1442,8 +1449,10 @@ private fun StaffPosTab(
     assignedCourt: Court?,
     initialSelectedBookingId: String?,
     retailSales: List<PosSaleItem>,
-    onSubmitPos: (targetBookingId: String?, note: String, amount: Int, method: String, onReset: () -> Unit) -> Unit,
+    inventoryItems: List<InventoryItemModel>,
+    onSubmitPos: (targetBookingId: String?, note: String, amount: Int, method: String, orderItems: List<PosOrderItemRequest>, onReset: () -> Unit) -> Unit,
 ) {
+    val context = LocalContext.current
     val activeBookings = remember(bookings, assignedCourt) {
         bookings.filter { it.status == "CHECKED_IN" }
             .sortedByDescending { assignedCourt != null && it.courtId == assignedCourt.id }
@@ -1458,14 +1467,12 @@ private fun StaffPosTab(
         )
     }
     var paymentMethod by remember { mutableStateOf("Tiền mặt") }
+    var cartCounts by remember(inventoryItems) { mutableStateOf<Map<String, Int>>(emptyMap()) }
 
-    var reviveCount by remember { mutableIntStateOf(0) }
-    var waterCount by remember { mutableIntStateOf(0) }
-    var bibCount by remember { mutableIntStateOf(0) }
-    var redbullCount by remember { mutableIntStateOf(0) }
-
-    val total = reviveCount * 15000 + waterCount * 10000 + bibCount * 50000 + redbullCount * 20000
-    val itemCount = reviveCount + waterCount + bibCount + redbullCount
+    val total = remember(inventoryItems, cartCounts) {
+        inventoryItems.sumOf { item -> (cartCounts[item.id] ?: 0) * item.sellPrice }
+    }
+    val itemCount = remember(cartCounts) { cartCounts.values.sum() }
     val retailTotalToday = remember(retailSales) { retailSales.sumOf { it.amount } }
 
     Column(Modifier.fillMaxSize()) {
@@ -1514,60 +1521,65 @@ private fun StaffPosTab(
             }
 
             item {
-                ProSectionHeader("2. Đồ uống & Dụng cụ ($itemCount món)")
+                ProSectionHeader("2. Kho hàng & Dịch vụ tại sân ($itemCount món đã chọn)")
             }
 
-            item {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    PosGridCard(
-                        name = "Revive chanh muối",
-                        price = 15000,
-                        count = reviveCount,
-                        icon = Icons.Outlined.LocalDrink,
-                        tint = ProColors.Emerald,
-                        bg = ProColors.EmeraldBg,
-                        onMinus = { if (reviveCount > 0) reviveCount-- },
-                        onPlus = { reviveCount++ },
-                        modifier = Modifier.weight(1f)
-                    )
-                    PosGridCard(
-                        name = "Nước khoáng 500ml",
-                        price = 10000,
-                        count = waterCount,
-                        icon = Icons.Rounded.WaterDrop,
-                        tint = ProColors.Sky,
-                        bg = ProColors.SkyBg,
-                        onMinus = { if (waterCount > 0) waterCount-- },
-                        onPlus = { waterCount++ },
-                        modifier = Modifier.weight(1f)
+            if (inventoryItems.isEmpty()) {
+                item {
+                    EmptyStateCard(
+                        title = "Kho hàng chi nhánh đang trống",
+                        subtitle = "Chủ sân có thể thêm nước uống và dụng cụ tại mục Kho hàng."
                     )
                 }
-            }
-
-            item {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    PosGridCard(
-                        name = "Thuê bộ áo bib (14c)",
-                        price = 50000,
-                        count = bibCount,
-                        icon = Icons.Rounded.Checkroom,
-                        tint = ProColors.Amber,
-                        bg = ProColors.AmberBg,
-                        onMinus = { if (bibCount > 0) bibCount-- },
-                        onPlus = { bibCount++ },
-                        modifier = Modifier.weight(1f)
-                    )
-                    PosGridCard(
-                        name = "Redbull Thái 250ml",
-                        price = 20000,
-                        count = redbullCount,
-                        icon = Icons.Rounded.Bolt,
-                        tint = ProColors.Rose,
-                        bg = ProColors.RoseBg,
-                        onMinus = { if (redbullCount > 0) redbullCount-- },
-                        onPlus = { redbullCount++ },
-                        modifier = Modifier.weight(1f)
-                    )
+            } else {
+                val rows = inventoryItems.chunked(2)
+                items(rows) { pair ->
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        pair.forEach { item ->
+                            val qty = cartCounts[item.id] ?: 0
+                            val (icon, tint, bg) = when {
+                                item.name.contains("bib", ignoreCase = true) || item.category == "EQUIPMENT" ->
+                                    Triple(Icons.Rounded.Checkroom, ProColors.Amber, ProColors.AmberBg)
+                                item.name.contains("nước khoáng", ignoreCase = true) || item.name.contains("suối", ignoreCase = true) ->
+                                    Triple(Icons.Rounded.WaterDrop, ProColors.Sky, ProColors.SkyBg)
+                                item.name.contains("redbull", ignoreCase = true) ->
+                                    Triple(Icons.Rounded.Bolt, ProColors.Rose, ProColors.RoseBg)
+                                else ->
+                                    Triple(Icons.Outlined.LocalDrink, ProColors.Emerald, ProColors.EmeraldBg)
+                            }
+                            PosGridCard(
+                                name = item.name,
+                                price = item.sellPrice,
+                                stockQuantity = item.stockQuantity,
+                                unit = item.unit,
+                                lowStock = item.lowStock,
+                                count = qty,
+                                icon = icon,
+                                tint = tint,
+                                bg = bg,
+                                onMinus = {
+                                    if (qty > 0) {
+                                        cartCounts = cartCounts.toMutableMap().apply {
+                                            if (qty <= 1) remove(item.id) else put(item.id, qty - 1)
+                                        }
+                                    }
+                                },
+                                onPlus = {
+                                    if (item.stockQuantity <= 0) {
+                                        Toast.makeText(context, "${item.name} đã hết hàng trong kho", Toast.LENGTH_SHORT).show()
+                                    } else if (qty >= item.stockQuantity) {
+                                        Toast.makeText(context, "Đã đạt giới hạn tồn kho (còn ${item.stockQuantity} ${item.unit})", Toast.LENGTH_SHORT).show()
+                                    } else {
+                                        cartCounts = cartCounts.toMutableMap().apply { put(item.id, qty + 1) }
+                                    }
+                                },
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                        if (pair.size == 1) {
+                            Spacer(Modifier.weight(1f))
+                        }
+                    }
                 }
             }
         }
@@ -1610,14 +1622,14 @@ private fun StaffPosTab(
                     Spacer(Modifier.width(12.dp))
                     Button(
                         onClick = {
-                            val parts = buildList {
-                                if (reviveCount > 0) add("${reviveCount}x Revive")
-                                if (waterCount > 0) add("${waterCount}x Nước suối")
-                                if (bibCount > 0) add("${bibCount}x Áo bib")
-                                if (redbullCount > 0) add("${redbullCount}x Redbull")
+                            val selectedEntries = inventoryItems.mapNotNull { item ->
+                                val q = cartCounts[item.id] ?: 0
+                                if (q > 0) item to q else null
                             }
-                            onSubmitPos(selectedBookingId, parts.joinToString(", "), total, paymentMethod) {
-                                reviveCount = 0; waterCount = 0; bibCount = 0; redbullCount = 0
+                            val noteText = selectedEntries.joinToString(", ") { (item, q) -> "${q}x ${item.name}" }
+                            val orderItems = selectedEntries.map { (item, q) -> PosOrderItemRequest(item.id, q) }
+                            onSubmitPos(selectedBookingId, noteText, total, paymentMethod, orderItems) {
+                                cartCounts = emptyMap()
                             }
                         },
                         enabled = total > 0,
@@ -1650,6 +1662,9 @@ private fun StaffPosTab(
 private fun PosGridCard(
     name: String,
     price: Int,
+    stockQuantity: Int,
+    unit: String,
+    lowStock: Boolean,
     count: Int,
     icon: ImageVector,
     tint: Color,
@@ -1658,21 +1673,28 @@ private fun PosGridCard(
     onPlus: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val stockColor = when {
+        stockQuantity <= 0 -> ProColors.Rose
+        lowStock -> ProColors.Amber
+        else -> ProColors.Emerald
+    }
+    val stockText = if (stockQuantity <= 0) "Hết hàng" else "Còn $stockQuantity $unit"
+
     ProCard(
         modifier = modifier,
         accentBorderColor = if (count > 0) ProColors.Primary.copy(alpha = 0.6f) else null
     ) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Box(
-                    modifier = Modifier.size(36.dp).clip(RoundedCornerShape(10.dp)).background(bg),
+                    modifier = Modifier.size(34.dp).clip(RoundedCornerShape(10.dp)).background(bg),
                     contentAlignment = Alignment.Center
                 ) {
-                    Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(20.dp))
+                    Icon(icon, contentDescription = null, tint = tint, modifier = Modifier.size(19.dp))
                 }
                 if (count > 0) {
                     Surface(color = ProColors.Primary, shape = CircleShape) {
@@ -1684,18 +1706,30 @@ private fun PosGridCard(
                             modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
                         )
                     }
+                } else {
+                    Text(
+                        stockText,
+                        fontSize = 10.5.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = stockColor
+                    )
                 }
             }
             Text(
                 name,
                 fontWeight = FontWeight.Bold,
-                fontSize = 13.5.sp,
+                fontSize = 13.sp,
                 color = ProColors.Ink,
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
                 minLines = 2
             )
-            Text("${price.vnd()} đ", fontSize = 13.sp, color = ProColors.Primary, fontWeight = FontWeight.Bold)
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Text("${price.vnd()} đ", fontSize = 13.sp, color = ProColors.Primary, fontWeight = FontWeight.Bold)
+                if (count > 0) {
+                    Text("Còn ${stockQuantity - count}", fontSize = 10.5.sp, color = stockColor, fontWeight = FontWeight.Medium)
+                }
+            }
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1714,8 +1748,13 @@ private fun PosGridCard(
                     fontSize = 14.sp,
                     color = if (count > 0) ProColors.Primary else ProColors.Muted
                 )
-                IconButton(onClick = onPlus, modifier = Modifier.size(30.dp)) {
-                    Icon(Icons.Rounded.Add, contentDescription = "Tăng", tint = ProColors.Primary, modifier = Modifier.size(16.dp))
+                IconButton(onClick = onPlus, enabled = stockQuantity > 0, modifier = Modifier.size(30.dp)) {
+                    Icon(
+                        Icons.Rounded.Add,
+                        contentDescription = "Tăng",
+                        tint = if (stockQuantity > 0) ProColors.Primary else ProColors.Muted,
+                        modifier = Modifier.size(16.dp)
+                    )
                 }
             }
         }

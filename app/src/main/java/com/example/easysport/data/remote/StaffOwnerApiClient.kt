@@ -2,9 +2,13 @@ package com.example.easysport.data.remote
 
 import com.example.easysport.data.model.BranchFieldItem
 import com.example.easysport.data.model.BranchRevenueItem
+import com.example.easysport.data.model.InventoryItemModel
+import com.example.easysport.data.model.InventoryTransactionModel
+import com.example.easysport.data.model.OwnerInventoryData
 import com.example.easysport.data.model.OwnerOverviewData
 import com.example.easysport.data.model.OwnerStaffAccount
 import com.example.easysport.data.model.OwnerWeekSchedule
+import com.example.easysport.data.model.PosOrderItemRequest
 import com.example.easysport.data.model.PosSaleItem
 import com.example.easysport.data.model.ScheduleDay
 import com.example.easysport.data.model.ScheduleSlot
@@ -78,11 +82,22 @@ object StaffOwnerApiClient {
         bookingId: String,
         serviceNote: String,
         serviceAmount: Int,
+        items: List<PosOrderItemRequest> = emptyList(),
     ): Result<StaffBookingItem> = withContext(Dispatchers.IO) {
         runCatching {
             val payload = JSONObject().apply {
                 put("serviceNote", serviceNote)
                 put("serviceAmount", serviceAmount)
+                if (items.isNotEmpty()) {
+                    put("items", JSONArray().apply {
+                        items.forEach { itItem ->
+                            put(JSONObject().apply {
+                                put("itemId", itItem.itemId)
+                                put("quantity", itItem.quantity)
+                            })
+                        }
+                    })
+                }
             }
             val (code, body) = send("POST", "${baseUrl()}/api/staff/bookings/$bookingId/services", payload.toString())
             parseBooking(extractDataObject(code, body, "Không thể thêm dịch vụ"))
@@ -114,6 +129,7 @@ object StaffOwnerApiClient {
         paymentMethod: String,
         courtId: String? = null,
         courtName: String? = null,
+        items: List<PosOrderItemRequest> = emptyList(),
     ): Result<PosSaleItem> = withContext(Dispatchers.IO) {
         runCatching {
             val payload = JSONObject().apply {
@@ -122,6 +138,16 @@ object StaffOwnerApiClient {
                 put("paymentMethod", paymentMethod)
                 if (!courtId.isNullOrBlank()) put("courtId", courtId)
                 if (!courtName.isNullOrBlank()) put("courtName", courtName)
+                if (items.isNotEmpty()) {
+                    put("items", JSONArray().apply {
+                        items.forEach { itItem ->
+                            put(JSONObject().apply {
+                                put("itemId", itItem.itemId)
+                                put("quantity", itItem.quantity)
+                            })
+                        }
+                    })
+                }
             }
             val (code, body) = send("POST", "${baseUrl()}/api/staff/pos/retail", payload.toString())
             parsePosSale(extractDataObject(code, body, "Không thể ghi nhận đơn bán lẻ"))
@@ -754,6 +780,171 @@ object StaffOwnerApiClient {
             status = o.optString("status", "PENDING"),
             confirmedBy = o.optNullable("confirmedBy"),
             shiftId = o.optNullable("shiftId"),
+        )
+    }
+
+    // ==================== INVENTORY (KHO HÀNG) ====================
+
+    suspend fun getStaffInventory(courtId: String? = null): Result<List<InventoryItemModel>> = withContext(Dispatchers.IO) {
+        runCatching {
+            val query = if (!courtId.isNullOrBlank()) "?courtId=${URLEncoder.encode(courtId, "UTF-8")}" else ""
+            val (code, body) = send("GET", "${baseUrl()}/api/staff/inventory$query", null)
+            val arr = extractDataArray(code, body, "Không thể tải kho hàng tại sân")
+            val list = mutableListOf<InventoryItemModel>()
+            for (i in 0 until arr.length()) {
+                list.add(parseInventoryItem(arr.getJSONObject(i)))
+            }
+            list
+        }
+    }
+
+    suspend fun getOwnerInventory(courtId: String? = null): Result<OwnerInventoryData> = withContext(Dispatchers.IO) {
+        runCatching {
+            val query = if (!courtId.isNullOrBlank() && courtId != "ALL") {
+                "?courtId=${URLEncoder.encode(courtId, "UTF-8")}"
+            } else ""
+            val (code, body) = send("GET", "${baseUrl()}/api/owner/inventory$query", null)
+            val data = extractDataObject(code, body, "Không thể tải danh sách kho hàng")
+            val itemsArr = data.optJSONArray("items") ?: JSONArray()
+            val items = mutableListOf<InventoryItemModel>()
+            for (i in 0 until itemsArr.length()) {
+                items.add(parseInventoryItem(itemsArr.getJSONObject(i)))
+            }
+            val txArr = data.optJSONArray("transactions") ?: JSONArray()
+            val txs = mutableListOf<InventoryTransactionModel>()
+            for (i in 0 until txArr.length()) {
+                txs.add(parseInventoryTransaction(txArr.getJSONObject(i)))
+            }
+            OwnerInventoryData(
+                items = items,
+                transactions = txs,
+                totalItems = data.optInt("totalItems", items.size),
+                totalUnits = data.optInt("totalUnits", 0),
+                lowStockCount = data.optInt("lowStockCount", 0),
+                totalStockValue = data.optLong("totalStockValue", 0L),
+            )
+        }
+    }
+
+    suspend fun createInventoryItem(
+        courtId: String,
+        name: String,
+        category: String,
+        unit: String,
+        importPrice: Int,
+        sellPrice: Int,
+        stockQuantity: Int,
+        minAlertThreshold: Int,
+    ): Result<InventoryItemModel> = withContext(Dispatchers.IO) {
+        runCatching {
+            val payload = JSONObject().apply {
+                put("courtId", courtId)
+                put("name", name)
+                put("category", category)
+                put("unit", unit)
+                put("importPrice", importPrice)
+                put("sellPrice", sellPrice)
+                put("stockQuantity", stockQuantity)
+                put("minAlertThreshold", minAlertThreshold)
+            }
+            val (code, body) = send("POST", "${baseUrl()}/api/owner/inventory", payload.toString())
+            parseInventoryItem(extractDataObject(code, body, "Không thể thêm mặt hàng"))
+        }
+    }
+
+    suspend fun updateInventoryItem(
+        id: String,
+        name: String,
+        category: String,
+        unit: String,
+        importPrice: Int,
+        sellPrice: Int,
+        minAlertThreshold: Int,
+    ): Result<InventoryItemModel> = withContext(Dispatchers.IO) {
+        runCatching {
+            val payload = JSONObject().apply {
+                put("name", name)
+                put("category", category)
+                put("unit", unit)
+                put("importPrice", importPrice)
+                put("sellPrice", sellPrice)
+                put("minAlertThreshold", minAlertThreshold)
+            }
+            val (code, body) = send("PUT", "${baseUrl()}/api/owner/inventory/$id", payload.toString())
+            parseInventoryItem(extractDataObject(code, body, "Không thể cập nhật mặt hàng"))
+        }
+    }
+
+    suspend fun restockInventoryItem(
+        id: String,
+        quantity: Int,
+        unitCost: Int,
+        note: String,
+    ): Result<InventoryItemModel> = withContext(Dispatchers.IO) {
+        runCatching {
+            val payload = JSONObject().apply {
+                put("quantity", quantity)
+                put("unitCost", unitCost)
+                put("note", note)
+            }
+            val (code, body) = send("POST", "${baseUrl()}/api/owner/inventory/$id/restock", payload.toString())
+            parseInventoryItem(extractDataObject(code, body, "Nhập kho thất bại"))
+        }
+    }
+
+    suspend fun adjustInventoryItem(
+        id: String,
+        newStock: Int,
+        note: String,
+    ): Result<InventoryItemModel> = withContext(Dispatchers.IO) {
+        runCatching {
+            val payload = JSONObject().apply {
+                put("newStock", newStock)
+                put("note", note)
+            }
+            val (code, body) = send("POST", "${baseUrl()}/api/owner/inventory/$id/adjust", payload.toString())
+            parseInventoryItem(extractDataObject(code, body, "Kiểm kê kho thất bại"))
+        }
+    }
+
+    suspend fun deleteInventoryItem(id: String): Result<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            val (code, body) = send("DELETE", "${baseUrl()}/api/owner/inventory/$id", null)
+            if (code !in 200..299) throw IllegalStateException(parseError(body, "Không thể xóa mặt hàng"))
+            id
+        }
+    }
+
+    private fun parseInventoryItem(o: JSONObject): InventoryItemModel {
+        return InventoryItemModel(
+            id = o.optString("id"),
+            courtId = o.optString("courtId"),
+            courtName = o.optString("courtName", ""),
+            name = o.optString("name"),
+            category = o.optString("category", "DRINK"),
+            unit = o.optString("unit", "chai"),
+            importPrice = o.optInt("importPrice", 0),
+            sellPrice = o.optInt("sellPrice", 0),
+            stockQuantity = o.optInt("stockQuantity", 0),
+            minAlertThreshold = o.optInt("minAlertThreshold", 10),
+            lowStock = o.optBoolean("lowStock", false),
+            updatedAt = o.optString("updatedAt", ""),
+        )
+    }
+
+    private fun parseInventoryTransaction(o: JSONObject): InventoryTransactionModel {
+        return InventoryTransactionModel(
+            id = o.optString("id"),
+            itemId = o.optString("itemId"),
+            itemName = o.optString("itemName", ""),
+            courtId = o.optString("courtId", ""),
+            type = o.optString("type", "IMPORT"),
+            quantityDelta = o.optInt("quantityDelta", 0),
+            stockAfter = o.optInt("stockAfter", 0),
+            unitCost = o.optInt("unitCost", 0),
+            note = o.optString("note", ""),
+            createdBy = o.optString("createdBy", ""),
+            createdAt = o.optString("createdAt", ""),
         )
     }
 
