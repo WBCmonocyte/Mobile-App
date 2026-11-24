@@ -151,10 +151,29 @@ data class BranchRevenueItem(
     val bookingCount: Int,
     val activeCount: Int,
     val revenue: Long,
+    val courtRevenue: Long = 0L,
+    val posRevenue: Long = 0L,
     val latitude: Double? = null,
     val longitude: Double? = null,
     val indoor: Boolean = false,
     val fields: List<BranchFieldItem> = emptyList(),
+)
+
+data class FieldRevenueStat(
+    val courtId: String,
+    val courtName: String,
+    val fieldName: String,
+    val bookingCount: Int,
+    val courtRevenue: Long,
+    val serviceRevenue: Long,
+    val totalRevenue: Long,
+)
+
+data class TimeSlotRevenueStat(
+    val slot: String,
+    val label: String,
+    val bookingCount: Int,
+    val revenue: Long,
 )
 
 data class OwnerStaffAccount(
@@ -175,12 +194,16 @@ data class OwnerOverviewData(
     val totalRevenue: Long,
     val cashRevenue: Long,
     val qrRevenue: Long,
+    val courtRevenue: Long = 0L,
+    val posRevenue: Long = 0L,
     val totalBookings: Int,
     val activeBookings: Int,
     val totalCourts: Int,
     val pendingReports: Int,
     val bookings: List<StaffBookingItem>,
     val branchRevenues: List<BranchRevenueItem> = emptyList(),
+    val fieldRevenues: List<FieldRevenueStat> = emptyList(),
+    val timeSlotRevenues: List<TimeSlotRevenueStat> = emptyList(),
 )
 
 data class InventoryItemModel(
@@ -195,6 +218,9 @@ data class InventoryItemModel(
     val stockQuantity: Int,
     val minAlertThreshold: Int,
     val lowStock: Boolean,
+    val sku: String = "",
+    val barcode: String = "",
+    val supplierName: String = "",
     val updatedAt: String = "",
 )
 
@@ -219,6 +245,72 @@ data class OwnerInventoryData(
     val totalUnits: Int,
     val lowStockCount: Int,
     val totalStockValue: Long,
+)
+
+data class TopSellingItemModel(
+    val itemId: String,
+    val itemName: String,
+    val courtName: String,
+    val unit: String,
+    val soldUnits: Long,
+    val revenue: Long,
+    val profit: Long,
+    val currentStock: Int,
+)
+
+data class CategoryStockStatModel(
+    val category: String,
+    val label: String,
+    val itemCount: Int,
+    val stockUnits: Int,
+    val stockValue: Long,
+    val soldUnits: Long,
+    val revenue: Long,
+)
+
+data class BranchStockStatModel(
+    val courtId: String,
+    val courtName: String,
+    val itemCount: Int,
+    val stockUnits: Int,
+    val stockValue: Long,
+    val lowStockCount: Int,
+    val revenue: Long,
+    val profit: Long,
+)
+
+data class ReorderSuggestionModel(
+    val itemId: String,
+    val name: String,
+    val courtId: String,
+    val courtName: String,
+    val unit: String,
+    val currentStock: Int,
+    val minAlertThreshold: Int,
+    val suggestedQty: Int,
+    val estimatedCost: Long,
+)
+
+data class OwnerInventoryStatsData(
+    val period: String,
+    val totalRevenue: Long,
+    val totalCogs: Long,
+    val grossProfit: Long,
+    val profitMarginPercent: Double,
+    val totalSoldUnits: Int,
+    val totalImportSpend: Long,
+    val totalImportedUnits: Int,
+    val totalWastageCost: Long,
+    val totalWastageUnits: Int,
+    val totalTransferCount: Int,
+    val totalStockValue: Long,
+    val totalPotentialRevenue: Long,
+    val lowStockCount: Int,
+    val outOfStockCount: Int,
+    val topSelling: List<TopSellingItemModel>,
+    val categoryBreakdown: List<CategoryStockStatModel>,
+    val branchBreakdown: List<BranchStockStatModel>,
+    val reorderSuggestions: List<ReorderSuggestionModel>,
 )
 
 data class PosOrderItemRequest(

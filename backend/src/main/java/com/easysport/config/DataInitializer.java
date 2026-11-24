@@ -407,6 +407,7 @@ public class DataInitializer implements CommandLineRunner {
                     new InventoryItem("inv_hg_redbull", "court_hoang_gia", "Sân bóng Hoàng Gia",
                             "Redbull tăng lực", "DRINK", "lon", 11000, 20000, 24, 8)
             );
+            applyInventoryMetadata(items);
             inventoryItemRepository.saveAll(items);
 
             inventoryTransactionRepository.saveAll(Arrays.asList(
@@ -418,6 +419,66 @@ public class DataInitializer implements CommandLineRunner {
                             "IMPORT", 9, 9, 11000, "Tồn đầu kỳ (sắp hết, cần nhập thêm)", "Trần Chủ Sân")
             ));
             System.out.println(">>> Đã khởi tạo dữ liệu mẫu Kho hàng (InventoryItems & InventoryTransactions)");
+        } else {
+            List<InventoryItem> existingItems = inventoryItemRepository.findAll();
+            boolean changed = applyInventoryMetadata(existingItems);
+            if (changed) {
+                inventoryItemRepository.saveAll(existingItems);
+            }
         }
+
+        if (inventoryTransactionRepository.count() <= 3) {
+            inventoryTransactionRepository.saveAll(Arrays.asList(
+                    new InventoryTransaction("tx_seed_sale_1", "inv_tp_revive", "Revive chanh muối", "court_thanh_phat",
+                            "SALE", -12, 48, 15000, "Bán lẻ tại quầy POS (khách đặt sân)", "Trần Thị Nhân Viên"),
+                    new InventoryTransaction("tx_seed_sale_2", "inv_tp_water", "Nước khoáng 500ml", "court_thanh_phat",
+                            "SALE", -18, 72, 10000, "Bán lẻ tại quầy POS", "Trần Thị Nhân Viên"),
+                    new InventoryTransaction("tx_seed_sale_3", "inv_tp_redbull", "Redbull tăng lực", "court_thanh_phat",
+                            "SALE", -6, 9, 20000, "Gắn vào đơn sân Sân 2", "Trần Thị Nhân Viên"),
+                    new InventoryTransaction("tx_seed_sale_4", "inv_hg_revive", "Revive chanh muối", "court_hoang_gia",
+                            "SALE", -8, 36, 15000, "Bán lẻ tại quầy POS", "Trần Thị Nhân Viên"),
+                    new InventoryTransaction("tx_seed_dmg_1", "inv_tp_water", "Nước khoáng 500ml", "court_thanh_phat",
+                            "DAMAGE", -2, 70, 4000, "Bẹp vỏ chai khi vận chuyển", "Trần Chủ Sân")
+            ));
+        }
+    }
+
+    private boolean applyInventoryMetadata(List<InventoryItem> items) {
+        boolean updated = false;
+        for (InventoryItem item : items) {
+            if (item.getSku() != null && !item.getSku().isBlank()) continue;
+            String n = item.getName() != null ? item.getName().toLowerCase() : "";
+            if (n.contains("revive")) {
+                item.setSku("REV-330");
+                item.setBarcode("8934588012112");
+                item.setSupplierName("Đại lý Nước Minh Anh");
+            } else if (n.contains("nước khoáng")) {
+                item.setSku("WTR-500");
+                item.setBarcode("8935049500112");
+                item.setSupplierName("Đại lý Nước Minh Anh");
+            } else if (n.contains("bib")) {
+                item.setSku("BIB-14");
+                item.setBarcode("8936001100014");
+                item.setSupplierName("Động Lực Sport");
+            } else if (n.contains("redbull")) {
+                item.setSku("RDB-250");
+                item.setBarcode("8850228000105");
+                item.setSupplierName("Đại lý Nước Minh Anh");
+            } else if (n.contains("bóng đá")) {
+                item.setSku("BALL-05");
+                item.setBarcode("8936001100055");
+                item.setSupplierName("Động Lực Sport");
+            } else if (n.contains("tất")) {
+                item.setSku("SCK-01");
+                item.setBarcode("8936001100099");
+                item.setSupplierName("Động Lực Sport");
+            } else {
+                item.setSku("SKU-" + item.getId().substring(0, Math.min(6, item.getId().length())).toUpperCase());
+                item.setBarcode("");
+                item.setSupplierName("Nhà cung cấp EasySport");
+            }
+            updated = true;
+        }
+        return updated;
     }
 }

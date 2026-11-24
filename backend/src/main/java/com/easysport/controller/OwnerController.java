@@ -23,11 +23,13 @@ import com.easysport.service.ShiftPlanningService;
 import com.easysport.util.PasswordHasher;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.Clock;
 import java.time.DayOfWeek;
 import java.time.LocalDate;
+import java.time.LocalTime;
 import java.time.YearMonth;
 import java.time.temporal.TemporalAdjusters;
 import java.util.*;
@@ -120,11 +122,26 @@ public class OwnerController {
         long totalRevenue = 0;
         long cashRevenue = 0;
         long qrRevenue = 0;
+        long totalCourtRevenue = 0;
+        long totalPosRevenue = 0;
         int activeCount = 0;
 
+        Map<String, Court> courtMap = new HashMap<>();
+        for (Court c : courts) {
+            courtMap.put(c.getId(), c);
+        }
+
         Map<String, Long> revenueByCourt = new HashMap<>();
+        Map<String, Long> courtRevenueByCourt = new HashMap<>();
+        Map<String, Long> posRevenueByCourt = new HashMap<>();
         Map<String, Integer> bookingCountByCourt = new HashMap<>();
         Map<String, Integer> activeCountByCourt = new HashMap<>();
+
+        Map<String, Map<String, Object>> fieldStatsMap = new LinkedHashMap<>();
+        Map<String, long[]> slotStats = new LinkedHashMap<>();
+        slotStats.put("MORNING", new long[]{0L, 0L});
+        slotStats.put("AFTERNOON", new long[]{0L, 0L});
+        slotStats.put("EVENING", new long[]{0L, 0L});
 
         for (Booking b : bookings) {
             String st = b.getStatus() != null ? b.getStatus().toUpperCase() : "";
@@ -136,19 +153,53 @@ public class OwnerController {
             }
             if (st.equals("PAID") || st.equals("DEPOSIT_PAID") || st.equals("CHECKED_IN") || st.equals("COMPLETED")) {
                 long amt;
+                long svcPart = 0;
                 if (splitSettledIds.contains(b.getId())) {
                     amt = b.getDepositAmount() != null ? b.getDepositAmount() : 0;
                 } else if (st.equals("COMPLETED") || st.equals("PAID")) {
-                    amt = (long) (b.getTotalPrice() != null ? b.getTotalPrice() : 0) + b.getServiceAmount();
+                    int basePrice = b.getTotalPrice() != null ? b.getTotalPrice() : 0;
+                    amt = (long) basePrice + b.getServiceAmount();
+                    svcPart = Math.min(amt, b.getServiceAmount());
                 } else {
                     amt = b.getDepositAmount() != null ? b.getDepositAmount() : 0;
                 }
+                long courtPart = Math.max(0L, amt - svcPart);
                 totalRevenue += amt;
+                totalCourtRevenue += courtPart;
+                totalPosRevenue += svcPart;
                 revenueByCourt.merge(cId, amt, Long::sum);
+                courtRevenueByCourt.merge(cId, courtPart, Long::sum);
+                posRevenueByCourt.merge(cId, svcPart, Long::sum);
                 if (StaffController.isQrMethod(b.getPaymentMethod())) {
                     qrRevenue += amt;
                 } else {
                     cashRevenue += amt;
+                }
+
+                Court courtObj = courtMap.get(cId);
+                String fieldLabel = resolveShortFieldName(courtObj, b.getFieldDetail());
+                String fieldKey = cId + "|" + fieldLabel;
+                Map<String, Object> fRow = fieldStatsMap.computeIfAbsent(fieldKey, k -> {
+                    Map<String, Object> m = new LinkedHashMap<>();
+                    m.put("courtId", cId);
+                    m.put("courtName", courtObj != null ? courtObj.getName() : (b.getCourtName() != null ? b.getCourtName() : "Sân bóng"));
+                    m.put("fieldName", fieldLabel);
+                    m.put("bookingCount", 0);
+                    m.put("courtRevenue", 0L);
+                    m.put("serviceRevenue", 0L);
+                    m.put("totalRevenue", 0L);
+                    return m;
+                });
+                fRow.put("bookingCount", (Integer) fRow.get("bookingCount") + 1);
+                fRow.put("courtRevenue", (Long) fRow.get("courtRevenue") + courtPart);
+                fRow.put("serviceRevenue", (Long) fRow.get("serviceRevenue") + svcPart);
+                fRow.put("totalRevenue", (Long) fRow.get("totalRevenue") + amt);
+
+                String slotKey = resolveTimeSlotBucket(b.getTimeRange());
+                long[] sArr = slotStats.get(slotKey);
+                if (sArr != null) {
+                    sArr[0] += 1;
+                    sArr[1] += amt;
                 }
             }
         }
@@ -158,6 +209,13 @@ public class OwnerController {
             totalRevenue += amt;
             String cId = sale.getCourtId() != null ? sale.getCourtId() : "";
             revenueByCourt.merge(cId, amt, Long::sum);
+            if (sale.getSettlementBookingId() != null) {
+                totalCourtRevenue += amt;
+                courtRevenueByCourt.merge(cId, amt, Long::sum);
+            } else {
+                totalPosRevenue += amt;
+                posRevenueByCourt.merge(cId, amt, Long::sum);
+            }
             if (StaffController.isQrMethod(sale.getPaymentMethod())) {
                 qrRevenue += amt;
             } else {
@@ -195,7 +253,28 @@ public class OwnerController {
             bm.put("bookingCount", bookingCountByCourt.getOrDefault(c.getId(), 0));
             bm.put("activeCount", activeCountByCourt.getOrDefault(c.getId(), 0));
             bm.put("revenue", revenueByCourt.getOrDefault(c.getId(), 0L));
+            bm.put("courtRevenue", courtRevenueByCourt.getOrDefault(c.getId(), 0L));
+            bm.put("posRevenue", posRevenueByCourt.getOrDefault(c.getId(), 0L));
             branchRevenues.add(bm);
+        }
+
+        List<Map<String, Object>> fieldRevenues = new ArrayList<>(fieldStatsMap.values());
+        fieldRevenues.sort((a, b) -> Long.compare((Long) b.get("totalRevenue"), (Long) a.get("totalRevenue")));
+
+        List<Map<String, Object>> timeSlotRevenues = new ArrayList<>();
+        for (Map.Entry<String, long[]> entry : slotStats.entrySet()) {
+            String slot = entry.getKey();
+            String label = switch (slot) {
+                case "MORNING" -> "Sáng (05:00 - 12:00)";
+                case "AFTERNOON" -> "Chiều (12:00 - 17:00)";
+                default -> "Tối (17:00 - 23:00)";
+            };
+            Map<String, Object> sm = new LinkedHashMap<>();
+            sm.put("slot", slot);
+            sm.put("label", label);
+            sm.put("bookingCount", (int) entry.getValue()[0]);
+            sm.put("revenue", entry.getValue()[1]);
+            timeSlotRevenues.add(sm);
         }
 
         long pendingReports = reports.stream().filter(r -> "PENDING".equalsIgnoreCase(r.getStatus())).count();
@@ -204,14 +283,43 @@ public class OwnerController {
         result.put("totalRevenue", totalRevenue);
         result.put("cashRevenue", cashRevenue);
         result.put("qrRevenue", qrRevenue);
+        result.put("courtRevenue", totalCourtRevenue);
+        result.put("posRevenue", totalPosRevenue);
         result.put("totalBookings", bookings.size());
         result.put("activeBookings", activeCount);
         result.put("totalCourts", courts.size());
         result.put("pendingReports", pendingReports);
         result.put("bookings", bookings);
         result.put("branchRevenues", branchRevenues);
+        result.put("fieldRevenues", fieldRevenues);
+        result.put("timeSlotRevenues", timeSlotRevenues);
 
         return ResponseEntity.ok(ApiResponse.success("Tổng quan chủ sân", result));
+    }
+
+    private static String resolveShortFieldName(Court court, String fieldDetail) {
+        String raw = fieldDetail != null ? fieldDetail.trim() : "";
+        if (raw.isEmpty()) return "Sân mặc định";
+        if (court != null && court.getFields() != null) {
+            for (CourtField f : court.getFields()) {
+                if (f.getLabel() != null && !f.getLabel().isBlank()) {
+                    if (raw.equalsIgnoreCase(f.getLabel()) || raw.toLowerCase().contains(f.getLabel().toLowerCase())
+                            || (f.getDetail() != null && f.getDetail().equalsIgnoreCase(raw))) {
+                        return f.getLabel();
+                    }
+                }
+            }
+        }
+        return raw.length() > 28 ? raw.substring(0, 28) + "..." : raw;
+    }
+
+    private static String resolveTimeSlotBucket(String timeRange) {
+        LocalTime[] times = StaffController.extractTimeInterval(timeRange);
+        if (times == null || times.length == 0) return "EVENING";
+        LocalTime start = times[0];
+        if (start.isBefore(LocalTime.of(12, 0))) return "MORNING";
+        if (start.isBefore(LocalTime.of(17, 0))) return "AFTERNOON";
+        return "EVENING";
     }
 
     @GetMapping("/shifts")
@@ -795,6 +903,15 @@ public class OwnerController {
                 id, court.getId(), court.getName(), name, category, unit,
                 importPrice, sellPrice, stockQuantity, minAlert
         );
+        if (body.get("sku") != null) {
+            item.setSku(String.valueOf(body.get("sku")).trim());
+        }
+        if (body.get("barcode") != null) {
+            item.setBarcode(String.valueOf(body.get("barcode")).trim());
+        }
+        if (body.get("supplierName") != null) {
+            item.setSupplierName(String.valueOf(body.get("supplierName")).trim());
+        }
         inventoryItemRepository.save(item);
 
         if (stockQuantity > 0) {
@@ -840,6 +957,15 @@ public class OwnerController {
         if (body.containsKey("minAlertThreshold")) {
             item.setMinAlertThreshold(Math.max(0, ((Number) body.get("minAlertThreshold")).intValue()));
         }
+        if (body.containsKey("sku")) {
+            item.setSku(body.get("sku") != null ? String.valueOf(body.get("sku")).trim() : "");
+        }
+        if (body.containsKey("barcode")) {
+            item.setBarcode(body.get("barcode") != null ? String.valueOf(body.get("barcode")).trim() : "");
+        }
+        if (body.containsKey("supplierName")) {
+            item.setSupplierName(body.get("supplierName") != null ? String.valueOf(body.get("supplierName")).trim() : "");
+        }
         item.setUpdatedAt(java.time.LocalDateTime.now(clock));
         inventoryItemRepository.save(item);
         return ResponseEntity.ok(ApiResponse.success("Đã cập nhật mặt hàng", toInventoryItemMap(item)));
@@ -864,17 +990,27 @@ public class OwnerController {
                 ? Math.max(0, ((Number) body.get("unitCost")).intValue())
                 : item.getImportPrice();
         String note = String.valueOf(body.getOrDefault("note", "Nhập thêm hàng vào kho")).trim();
+        if (body.get("supplierName") != null) {
+            String sup = String.valueOf(body.get("supplierName")).trim();
+            if (!sup.isEmpty()) item.setSupplierName(sup);
+        }
 
         item.setStockQuantity(item.getStockQuantity() + quantity);
         if (unitCost > 0) item.setImportPrice(unitCost);
         item.setUpdatedAt(java.time.LocalDateTime.now(clock));
         inventoryItemRepository.save(item);
 
+        String fullNote = note.isEmpty() ? "Nhập thêm hàng" : note;
+        if (item.getSupplierName() != null && !item.getSupplierName().isBlank()
+                && !fullNote.toLowerCase().contains(item.getSupplierName().toLowerCase())) {
+            fullNote = fullNote + " (NCC: " + item.getSupplierName() + ")";
+        }
+
         InventoryTransaction tx = new InventoryTransaction(
                 "tx_" + UUID.randomUUID().toString().substring(0, 8),
                 item.getId(), item.getName(), item.getCourtId(),
                 "IMPORT", quantity, item.getStockQuantity(), unitCost,
-                note.isEmpty() ? "Nhập thêm hàng" : note, owner.getFullName()
+                fullNote, owner.getFullName()
         );
         inventoryTransactionRepository.save(tx);
 
@@ -919,6 +1055,384 @@ public class OwnerController {
         return ResponseEntity.ok(ApiResponse.success("Đã cập nhật kiểm kê kho", toInventoryItemMap(item)));
     }
 
+    @PostMapping("/inventory/{id}/wastage")
+    public ResponseEntity<ApiResponse<Map<String, Object>>> wastageInventoryItem(
+            @PathVariable String id,
+            @RequestHeader(value = "Authorization", required = false) String authHeader,
+            @RequestBody Map<String, Object> body
+    ) {
+        User owner = requireOwner(authHeader);
+        InventoryItem item = inventoryItemRepository.findById(id).orElse(null);
+        if (item == null || !Boolean.TRUE.equals(item.getActive())) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(ApiResponse.error("Không tìm thấy mặt hàng."));
+        }
+        int quantity = ((Number) body.getOrDefault("quantity", 0)).intValue();
+        if (quantity <= 0) {
+            return ResponseEntity.badRequest().body(ApiResponse.error("Số lượng xuất hủy phải lớn hơn 0."));
+        }
+        if (item.getStockQuantity() < quantity) {
+            return ResponseEntity.badRequest().body(ApiResponse.error(
+                    "Không đủ tồn kho để xuất hủy (chỉ còn " + item.getStockQuantity() + " " + item.getUnit() + ")."
+            ));
+        }
+        String rawType = String.valueOf(body.getOrDefault("reasonType", "DAMAGE")).trim().toUpperCase();
+        String reasonType = switch (rawType) {
+            case "EXPIRED", "INTERNAL_USE" -> rawType;
+            default -> "DAMAGE";
+        };
+        String defaultNote = switch (reasonType) {
+            case "EXPIRED" -> "Hàng hết hạn sử dụng";
+            case "INTERNAL_USE" -> "Xuất dùng nội bộ / Tài trợ giải đấu";
+            default -> "Hàng hư hỏng / rơi vỡ";
+        };
+        String note = String.valueOf(body.getOrDefault("note", defaultNote)).trim();
+        if (note.isEmpty()) note = defaultNote;
+
+        int newStock = item.getStockQuantity() - quantity;
+        item.setStockQuantity(newStock);
+        item.setUpdatedAt(java.time.LocalDateTime.now(clock));
+        inventoryItemRepository.save(item);
+
+        InventoryTransaction tx = new InventoryTransaction(
+                "tx_" + UUID.randomUUID().toString().substring(0, 8),
+                item.getId(), item.getName(), item.getCourtId(),
+                reasonType, -quantity, newStock, item.getImportPrice(),
+                note, owner.getFullName()
+        );
+        inventoryTransactionRepository.save(tx);
+
+        return ResponseEntity.ok(ApiResponse.success(
+                "Đã xuất hủy " + quantity + " " + item.getUnit() + " " + item.getName(),
+                toInventoryItemMap(item)
+        ));
+    }
+
+    @Transactional(rollbackFor = Exception.class)
+    @PostMapping("/inventory/{id}/transfer")
+    public ResponseEntity<ApiResponse<Map<String, Object>>> transferInventoryItem(
+            @PathVariable String id,
+            @RequestHeader(value = "Authorization", required = false) String authHeader,
+            @RequestBody Map<String, Object> body
+    ) {
+        User owner = requireOwner(authHeader);
+        InventoryItem source = inventoryItemRepository.findById(id).orElse(null);
+        if (source == null || !Boolean.TRUE.equals(source.getActive())) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(ApiResponse.error("Không tìm thấy mặt hàng nguồn."));
+        }
+        String targetCourtId = String.valueOf(body.getOrDefault("targetCourtId", "")).trim();
+        if (targetCourtId.isEmpty()) {
+            return ResponseEntity.badRequest().body(ApiResponse.error("Vui lòng chọn chi nhánh nhận hàng."));
+        }
+        if (targetCourtId.equals(source.getCourtId())) {
+            return ResponseEntity.badRequest().body(ApiResponse.error("Chi nhánh nhận phải khác chi nhánh xuất."));
+        }
+        Court targetCourt = courtRepository.findById(targetCourtId).orElse(null);
+        if (targetCourt == null) {
+            return ResponseEntity.badRequest().body(ApiResponse.error("Không tìm thấy chi nhánh nhận: " + targetCourtId));
+        }
+        int quantity = ((Number) body.getOrDefault("quantity", 0)).intValue();
+        if (quantity <= 0) {
+            return ResponseEntity.badRequest().body(ApiResponse.error("Số lượng chuyển kho phải lớn hơn 0."));
+        }
+        if (source.getStockQuantity() < quantity) {
+            return ResponseEntity.badRequest().body(ApiResponse.error(
+                    "Không đủ tồn kho để điều chuyển (chỉ còn " + source.getStockQuantity() + " " + source.getUnit() + ")."
+            ));
+        }
+        String note = String.valueOf(body.getOrDefault("note", "")).trim();
+
+        int newSourceStock = source.getStockQuantity() - quantity;
+        source.setStockQuantity(newSourceStock);
+        source.setUpdatedAt(java.time.LocalDateTime.now(clock));
+        inventoryItemRepository.save(source);
+
+        String outNote = "Chuyển sang " + targetCourt.getName() + (note.isEmpty() ? "" : " · " + note);
+        inventoryTransactionRepository.save(new InventoryTransaction(
+                "tx_" + UUID.randomUUID().toString().substring(0, 8),
+                source.getId(), source.getName(), source.getCourtId(),
+                "TRANSFER_OUT", -quantity, newSourceStock, source.getImportPrice(),
+                outNote, owner.getFullName()
+        ));
+
+        List<InventoryItem> targetItems = inventoryItemRepository.findByCourtIdAndActiveTrue(targetCourtId);
+        InventoryItem dest = null;
+        String srcSku = source.getSku() != null ? source.getSku().trim() : "";
+        for (InventoryItem candidate : targetItems) {
+            if (!srcSku.isEmpty() && candidate.getSku() != null && srcSku.equalsIgnoreCase(candidate.getSku().trim())) {
+                dest = candidate;
+                break;
+            }
+            if (candidate.getName() != null && candidate.getName().equalsIgnoreCase(source.getName())) {
+                dest = candidate;
+                break;
+            }
+        }
+        if (dest == null) {
+            dest = new InventoryItem(
+                    "inv_" + UUID.randomUUID().toString().substring(0, 8),
+                    targetCourt.getId(), targetCourt.getName(),
+                    source.getName(), source.getCategory(), source.getUnit(),
+                    source.getImportPrice(), source.getSellPrice(),
+                    quantity, source.getMinAlertThreshold()
+            );
+            dest.setSku(source.getSku());
+            dest.setBarcode(source.getBarcode());
+            dest.setSupplierName(source.getSupplierName());
+        } else {
+            dest.setStockQuantity(dest.getStockQuantity() + quantity);
+        }
+        dest.setUpdatedAt(java.time.LocalDateTime.now(clock));
+        inventoryItemRepository.save(dest);
+
+        String inNote = "Nhận chuyển từ " + source.getCourtName() + (note.isEmpty() ? "" : " · " + note);
+        inventoryTransactionRepository.save(new InventoryTransaction(
+                "tx_" + UUID.randomUUID().toString().substring(0, 8),
+                dest.getId(), dest.getName(), dest.getCourtId(),
+                "TRANSFER_IN", quantity, dest.getStockQuantity(), source.getImportPrice(),
+                inNote, owner.getFullName()
+        ));
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("source", toInventoryItemMap(source));
+        result.put("target", toInventoryItemMap(dest));
+        return ResponseEntity.ok(ApiResponse.success(
+                "Đã điều chuyển " + quantity + " " + source.getUnit() + " " + source.getName() + " sang " + targetCourt.getName(),
+                result
+        ));
+    }
+
+    @GetMapping("/inventory/stats")
+    public ResponseEntity<ApiResponse<Map<String, Object>>> getInventoryStats(
+            @RequestHeader(value = "Authorization", required = false) String authHeader,
+            @RequestParam(required = false) String courtId,
+            @RequestParam(value = "period", required = false, defaultValue = "ALL") String period
+    ) {
+        requireOwner(authHeader);
+        String filterCourt = courtId != null && !courtId.isBlank() && !"ALL".equalsIgnoreCase(courtId)
+                ? courtId.trim() : null;
+        String normalizedPeriod = period != null ? period.trim().toUpperCase() : "ALL";
+
+        LocalDate today = LocalDate.now(clock);
+        LocalDate weekStart = today.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
+        LocalDate weekEnd = weekStart.plusDays(6);
+        YearMonth thisMonth = YearMonth.from(today);
+
+        List<InventoryItem> allItems = inventoryItemRepository.findAll();
+        Map<String, InventoryItem> itemById = new HashMap<>();
+        for (InventoryItem it : allItems) {
+            itemById.put(it.getId(), it);
+        }
+
+        List<InventoryItem> activeItems = filterCourt != null
+                ? inventoryItemRepository.findByCourtIdAndActiveTrueOrderByNameAsc(filterCourt)
+                : inventoryItemRepository.findByActiveTrueOrderByCourtIdAscNameAsc();
+
+        List<InventoryTransaction> rawTxs = filterCourt != null
+                ? inventoryTransactionRepository.findByCourtIdOrderByCreatedAtDesc(filterCourt)
+                : inventoryTransactionRepository.findByOrderByCreatedAtDesc();
+
+        List<InventoryTransaction> txs = rawTxs.stream()
+                .filter(tx -> {
+                    LocalDate txDate = tx.getCreatedAt() != null ? tx.getCreatedAt().toLocalDate() : today;
+                    return matchesPeriod(txDate, normalizedPeriod, today, weekStart, weekEnd, thisMonth);
+                })
+                .toList();
+
+        long totalRevenue = 0;
+        long totalCogs = 0;
+        int totalSoldUnits = 0;
+        long totalImportSpend = 0;
+        int totalImportedUnits = 0;
+        long totalWastageCost = 0;
+        int totalWastageUnits = 0;
+        int totalTransferCount = 0;
+
+        Map<String, Long> soldQtyByItem = new HashMap<>();
+        Map<String, Long> revenueByItem = new HashMap<>();
+        Map<String, Long> profitByItem = new HashMap<>();
+        Map<String, Long> revenueByCategory = new HashMap<>();
+        Map<String, Long> soldUnitsByCategory = new HashMap<>();
+        Map<String, Long> revenueByCourt = new HashMap<>();
+        Map<String, Long> profitByCourt = new HashMap<>();
+
+        for (InventoryTransaction tx : txs) {
+            String type = tx.getType() != null ? tx.getType().toUpperCase() : "";
+            int absQty = Math.abs(tx.getQuantityDelta() != null ? tx.getQuantityDelta() : 0);
+            InventoryItem item = itemById.get(tx.getItemId());
+            int importCost = item != null && item.getImportPrice() != null ? item.getImportPrice() : 0;
+            String cat = item != null && item.getCategory() != null ? item.getCategory().toUpperCase() : "DRINK";
+
+            switch (type) {
+                case "SALE" -> {
+                    int sellUnitPrice = tx.getUnitCost() != null && tx.getUnitCost() > 0
+                            ? tx.getUnitCost()
+                            : (item != null && item.getSellPrice() != null ? item.getSellPrice() : 0);
+                    long rev = (long) absQty * sellUnitPrice;
+                    // Dụng cụ (EQUIPMENT: bóng, áo bib) là tài sản cho thuê quay vòng, không tiêu hao giá vốn mỗi lượt
+                    long cost = "EQUIPMENT".equals(cat) ? 0L : (long) absQty * importCost;
+                    long prof = rev - cost;
+
+                    totalRevenue += rev;
+                    totalCogs += cost;
+                    totalSoldUnits += absQty;
+
+                    soldQtyByItem.merge(tx.getItemId(), (long) absQty, Long::sum);
+                    revenueByItem.merge(tx.getItemId(), rev, Long::sum);
+                    profitByItem.merge(tx.getItemId(), prof, Long::sum);
+                    revenueByCategory.merge(cat, rev, Long::sum);
+                    soldUnitsByCategory.merge(cat, (long) absQty, Long::sum);
+                    revenueByCourt.merge(tx.getCourtId(), rev, Long::sum);
+                    profitByCourt.merge(tx.getCourtId(), prof, Long::sum);
+                }
+                case "IMPORT" -> {
+                    int unitCost = tx.getUnitCost() != null && tx.getUnitCost() > 0 ? tx.getUnitCost() : importCost;
+                    totalImportSpend += (long) absQty * unitCost;
+                    totalImportedUnits += absQty;
+                }
+                case "DAMAGE", "EXPIRED", "INTERNAL_USE" -> {
+                    int unitCost = tx.getUnitCost() != null && tx.getUnitCost() > 0 ? tx.getUnitCost() : importCost;
+                    totalWastageCost += (long) absQty * unitCost;
+                    totalWastageUnits += absQty;
+                }
+                case "TRANSFER_OUT" -> totalTransferCount++;
+                default -> {}
+            }
+        }
+
+        long grossProfit = totalRevenue - totalCogs;
+        double profitMarginPercent = totalRevenue > 0
+                ? Math.round((grossProfit * 1000.0) / totalRevenue) / 10.0
+                : 0.0;
+
+        long totalStockValue = 0;
+        long totalPotentialRevenue = 0;
+        int lowStockCount = 0;
+        int outOfStockCount = 0;
+
+        Map<String, int[]> catStockCounts = new LinkedHashMap<>();
+        catStockCounts.put("DRINK", new int[]{0, 0});
+        catStockCounts.put("EQUIPMENT", new int[]{0, 0});
+        catStockCounts.put("ACCESSORY", new int[]{0, 0});
+        Map<String, Long> catStockValue = new HashMap<>();
+
+        Map<String, Map<String, Object>> branchMap = new LinkedHashMap<>();
+        List<Map<String, Object>> reorderSuggestions = new ArrayList<>();
+
+        for (InventoryItem item : activeItems) {
+            int qty = item.getStockQuantity() != null ? item.getStockQuantity() : 0;
+            int imp = item.getImportPrice() != null ? item.getImportPrice() : 0;
+            int sell = item.getSellPrice() != null ? item.getSellPrice() : 0;
+            long val = (long) qty * imp;
+            totalStockValue += val;
+            totalPotentialRevenue += (long) qty * sell;
+            if (qty <= 0) outOfStockCount++;
+            if (item.isLowStock()) lowStockCount++;
+
+            String cat = item.getCategory() != null ? item.getCategory().toUpperCase() : "DRINK";
+            int[] counts = catStockCounts.computeIfAbsent(cat, k -> new int[]{0, 0});
+            counts[0] += 1;
+            counts[1] += qty;
+            catStockValue.merge(cat, val, Long::sum);
+
+            Map<String, Object> bm = branchMap.computeIfAbsent(item.getCourtId(), k -> {
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("courtId", item.getCourtId());
+                m.put("courtName", item.getCourtName());
+                m.put("itemCount", 0);
+                m.put("stockUnits", 0);
+                m.put("stockValue", 0L);
+                m.put("lowStockCount", 0);
+                m.put("revenue", revenueByCourt.getOrDefault(item.getCourtId(), 0L));
+                m.put("profit", profitByCourt.getOrDefault(item.getCourtId(), 0L));
+                return m;
+            });
+            bm.put("itemCount", (Integer) bm.get("itemCount") + 1);
+            bm.put("stockUnits", (Integer) bm.get("stockUnits") + qty);
+            bm.put("stockValue", (Long) bm.get("stockValue") + val);
+            if (item.isLowStock()) {
+                bm.put("lowStockCount", (Integer) bm.get("lowStockCount") + 1);
+            }
+
+            if (item.isLowStock() || qty <= 0) {
+                int minAlert = item.getMinAlertThreshold() != null ? item.getMinAlertThreshold() : 10;
+                int suggestedQty = Math.max(minAlert * 3 - qty, 12);
+                Map<String, Object> sug = new LinkedHashMap<>();
+                sug.put("itemId", item.getId());
+                sug.put("name", item.getName());
+                sug.put("courtId", item.getCourtId());
+                sug.put("courtName", item.getCourtName());
+                sug.put("unit", item.getUnit());
+                sug.put("currentStock", qty);
+                sug.put("minAlertThreshold", minAlert);
+                sug.put("suggestedQty", suggestedQty);
+                sug.put("estimatedCost", (long) suggestedQty * imp);
+                reorderSuggestions.add(sug);
+            }
+        }
+
+        reorderSuggestions.sort(Comparator.comparingInt(m -> (Integer) m.get("currentStock")));
+
+        List<Map<String, Object>> topSelling = new ArrayList<>();
+        List<Map.Entry<String, Long>> sortedSales = new ArrayList<>(revenueByItem.entrySet());
+        sortedSales.sort((a, b) -> Long.compare(b.getValue(), a.getValue()));
+        for (int i = 0; i < Math.min(5, sortedSales.size()); i++) {
+            String itemId = sortedSales.get(i).getKey();
+            InventoryItem item = itemById.get(itemId);
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("itemId", itemId);
+            row.put("itemName", item != null ? item.getName() : itemId);
+            row.put("courtName", item != null ? item.getCourtName() : "");
+            row.put("unit", item != null ? item.getUnit() : "sp");
+            row.put("soldUnits", soldQtyByItem.getOrDefault(itemId, 0L));
+            row.put("revenue", sortedSales.get(i).getValue());
+            row.put("profit", profitByItem.getOrDefault(itemId, 0L));
+            row.put("currentStock", item != null && item.getStockQuantity() != null ? item.getStockQuantity() : 0);
+            topSelling.add(row);
+        }
+
+        List<Map<String, Object>> categoryBreakdown = new ArrayList<>();
+        for (Map.Entry<String, int[]> entry : catStockCounts.entrySet()) {
+            String cat = entry.getKey();
+            String label = switch (cat) {
+                case "EQUIPMENT" -> "Dụng cụ";
+                case "ACCESSORY" -> "Phụ kiện";
+                default -> "Đồ uống";
+            };
+            Map<String, Object> cm = new LinkedHashMap<>();
+            cm.put("category", cat);
+            cm.put("label", label);
+            cm.put("itemCount", entry.getValue()[0]);
+            cm.put("stockUnits", entry.getValue()[1]);
+            cm.put("stockValue", catStockValue.getOrDefault(cat, 0L));
+            cm.put("soldUnits", soldUnitsByCategory.getOrDefault(cat, 0L));
+            cm.put("revenue", revenueByCategory.getOrDefault(cat, 0L));
+            categoryBreakdown.add(cm);
+        }
+
+        Map<String, Object> stats = new LinkedHashMap<>();
+        stats.put("period", normalizedPeriod);
+        stats.put("totalRevenue", totalRevenue);
+        stats.put("totalCogs", totalCogs);
+        stats.put("grossProfit", grossProfit);
+        stats.put("profitMarginPercent", profitMarginPercent);
+        stats.put("totalSoldUnits", totalSoldUnits);
+        stats.put("totalImportSpend", totalImportSpend);
+        stats.put("totalImportedUnits", totalImportedUnits);
+        stats.put("totalWastageCost", totalWastageCost);
+        stats.put("totalWastageUnits", totalWastageUnits);
+        stats.put("totalTransferCount", totalTransferCount);
+        stats.put("totalStockValue", totalStockValue);
+        stats.put("totalPotentialRevenue", totalPotentialRevenue);
+        stats.put("lowStockCount", lowStockCount);
+        stats.put("outOfStockCount", outOfStockCount);
+        stats.put("topSelling", topSelling);
+        stats.put("categoryBreakdown", categoryBreakdown);
+        stats.put("branchBreakdown", new ArrayList<>(branchMap.values()));
+        stats.put("reorderSuggestions", reorderSuggestions);
+
+        return ResponseEntity.ok(ApiResponse.success("Thống kê kho hàng", stats));
+    }
+
     @DeleteMapping("/inventory/{id}")
     public ResponseEntity<ApiResponse<String>> deleteInventoryItem(
             @PathVariable String id,
@@ -948,6 +1462,9 @@ public class OwnerController {
         m.put("stockQuantity", item.getStockQuantity());
         m.put("minAlertThreshold", item.getMinAlertThreshold());
         m.put("lowStock", item.isLowStock());
+        m.put("sku", item.getSku() != null ? item.getSku() : "");
+        m.put("barcode", item.getBarcode() != null ? item.getBarcode() : "");
+        m.put("supplierName", item.getSupplierName() != null ? item.getSupplierName() : "");
         m.put("updatedAt", item.getUpdatedAt() != null ? item.getUpdatedAt().toString() : "");
         return m;
     }

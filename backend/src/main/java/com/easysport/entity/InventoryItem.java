@@ -44,6 +44,15 @@ public class InventoryItem {
     @Column(name = "min_alert_threshold", nullable = false)
     private Integer minAlertThreshold = 10;
 
+    @Column(length = 50)
+    private String sku;
+
+    @Column(length = 80)
+    private String barcode;
+
+    @Column(name = "supplier_name", length = 150)
+    private String supplierName;
+
     @Column(nullable = false)
     private Boolean active = true;
 
@@ -98,6 +107,15 @@ public class InventoryItem {
 
     public Integer getMinAlertThreshold() { return minAlertThreshold; }
     public void setMinAlertThreshold(Integer minAlertThreshold) { this.minAlertThreshold = minAlertThreshold; }
+
+    public String getSku() { return sku; }
+    public void setSku(String sku) { this.sku = sku; }
+
+    public String getBarcode() { return barcode; }
+    public void setBarcode(String barcode) { this.barcode = barcode; }
+
+    public String getSupplierName() { return supplierName; }
+    public void setSupplierName(String supplierName) { this.supplierName = supplierName; }
 
     public Boolean getActive() { return active; }
     public void setActive(Boolean active) { this.active = active; }

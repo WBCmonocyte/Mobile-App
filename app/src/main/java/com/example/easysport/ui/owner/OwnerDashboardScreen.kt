@@ -72,6 +72,7 @@ import com.example.easysport.data.model.BranchRevenueItem
 import com.example.easysport.data.model.Court
 import com.example.easysport.data.model.InventoryItemModel
 import com.example.easysport.data.model.OwnerInventoryData
+import com.example.easysport.data.model.OwnerInventoryStatsData
 import com.example.easysport.data.model.OwnerOverviewData
 import com.example.easysport.data.model.OwnerStaffAccount
 import com.example.easysport.data.model.OwnerWeekSchedule
@@ -154,9 +155,14 @@ fun OwnerDashboardScreen(
     var editingStaffAccount by remember { mutableStateOf<OwnerStaffAccount?>(null) }
 
     var inventoryData by remember { mutableStateOf<OwnerInventoryData?>(null) }
+    var inventoryStats by remember { mutableStateOf<OwnerInventoryStatsData?>(null) }
     var inventoryBranchId by remember { mutableStateOf<String?>(null) }
+    var inventoryStatsPeriod by remember { mutableStateOf("ALL") }
     var restockTarget by remember { mutableStateOf<InventoryItemModel?>(null) }
+    var restockInitialQty by remember { mutableStateOf(24) }
     var adjustTarget by remember { mutableStateOf<InventoryItemModel?>(null) }
+    var wastageTarget by remember { mutableStateOf<InventoryItemModel?>(null) }
+    var transferTarget by remember { mutableStateOf<InventoryItemModel?>(null) }
     var showInventoryForm by remember { mutableStateOf(false) }
     var editingInventoryItem by remember { mutableStateOf<InventoryItemModel?>(null) }
     var pendingDeleteInventoryItem by remember { mutableStateOf<InventoryItemModel?>(null) }
@@ -166,6 +172,7 @@ fun OwnerDashboardScreen(
         targetPeriod: String = selectedPeriod,
         targetBranch: String? = selectedBranchId,
         targetInvBranch: String? = inventoryBranchId,
+        targetInvPeriod: String = inventoryStatsPeriod,
     ) {
         scope.launch {
             isRefreshing = true
@@ -182,6 +189,7 @@ fun OwnerDashboardScreen(
             StaffOwnerApiClient.getOwnerReports().onSuccess { reports = it }
             StaffOwnerApiClient.getOwnerStaffList().onSuccess { staffAccounts = it }
             StaffOwnerApiClient.getOwnerInventory(targetInvBranch).onSuccess { inventoryData = it }
+            StaffOwnerApiClient.getOwnerInventoryStats(targetInvBranch, targetInvPeriod).onSuccess { inventoryStats = it }
             isRefreshing = false
         }
     }
@@ -240,13 +248,15 @@ fun OwnerDashboardScreen(
             when (currentTab) {
                 OwnerTab.OVERVIEW -> OwnerOverviewTab(
                     overview = overview,
+                    inventoryStats = inventoryStats,
                     selectedPeriod = selectedPeriod,
                     onSelectPeriod = { p ->
                         selectedPeriod = p
                         refreshAll(targetPeriod = p)
                     },
                     pendingReports = pendingReportCount,
-                    onGoToReports = { currentTab = OwnerTab.REPORTS }
+                    onGoToReports = { currentTab = OwnerTab.REPORTS },
+                    onGoToInventory = { currentTab = OwnerTab.INVENTORY },
                 )
                 OwnerTab.SHIFTS -> OwnerShiftsTab(
                     schedule = schedule,
@@ -278,11 +288,17 @@ fun OwnerDashboardScreen(
                 )
                 OwnerTab.INVENTORY -> OwnerInventoryTab(
                     inventoryData = inventoryData,
+                    inventoryStats = inventoryStats,
                     branches = overview?.branchRevenues ?: emptyList(),
                     selectedBranchId = inventoryBranchId,
+                    statsPeriod = inventoryStatsPeriod,
                     onSelectBranch = { bId ->
                         inventoryBranchId = bId
                         refreshAll(targetInvBranch = bId)
+                    },
+                    onSelectStatsPeriod = { p ->
+                        inventoryStatsPeriod = p
+                        refreshAll(targetInvPeriod = p)
                     },
                     onAddItem = {
                         editingInventoryItem = null
@@ -292,8 +308,17 @@ fun OwnerDashboardScreen(
                         editingInventoryItem = item
                         showInventoryForm = true
                     },
-                    onRestockItem = { restockTarget = it },
+                    onRestockItem = {
+                        restockInitialQty = 24
+                        restockTarget = it
+                    },
+                    onQuickReorder = { item, suggestedQty ->
+                        restockInitialQty = suggestedQty
+                        restockTarget = item
+                    },
                     onAdjustItem = { adjustTarget = it },
+                    onWastageItem = { wastageTarget = it },
+                    onTransferItem = { transferTarget = it },
                     onDeleteItem = { pendingDeleteInventoryItem = it }
                 )
                 OwnerTab.MANAGE -> OwnerManageTab(
@@ -679,13 +704,51 @@ fun OwnerDashboardScreen(
     restockTarget?.let { target ->
         RestockInventoryDialog(
             item = target,
+            initialQuantity = restockInitialQty,
             onDismiss = { restockTarget = null },
-            onConfirm = { qty, cost, note ->
+            onConfirm = { qty, cost, note, sup ->
                 restockTarget = null
                 scope.launch {
-                    StaffOwnerApiClient.restockInventoryItem(target.id, qty, cost, note)
+                    StaffOwnerApiClient.restockInventoryItem(target.id, qty, cost, note, sup)
                         .onSuccess {
                             Toast.makeText(context, "Đã nhập thêm $qty ${target.unit} ${target.name}", Toast.LENGTH_SHORT).show()
+                            refreshAll()
+                        }
+                        .onFailure { Toast.makeText(context, it.message, Toast.LENGTH_LONG).show() }
+                }
+            }
+        )
+    }
+
+    wastageTarget?.let { target ->
+        WastageInventoryDialog(
+            item = target,
+            onDismiss = { wastageTarget = null },
+            onConfirm = { qty, reasonType, note ->
+                wastageTarget = null
+                scope.launch {
+                    StaffOwnerApiClient.wastageInventoryItem(target.id, qty, reasonType, note)
+                        .onSuccess {
+                            Toast.makeText(context, "Đã xuất hủy $qty ${target.unit} ${target.name}", Toast.LENGTH_SHORT).show()
+                            refreshAll()
+                        }
+                        .onFailure { Toast.makeText(context, it.message, Toast.LENGTH_LONG).show() }
+                }
+            }
+        )
+    }
+
+    transferTarget?.let { target ->
+        TransferInventoryDialog(
+            item = target,
+            branches = overview?.branchRevenues ?: emptyList(),
+            onDismiss = { transferTarget = null },
+            onConfirm = { targetCourtId, qty, note ->
+                transferTarget = null
+                scope.launch {
+                    StaffOwnerApiClient.transferInventoryItem(target.id, targetCourtId, qty, note)
+                        .onSuccess { msg ->
+                            Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
                             refreshAll()
                         }
                         .onFailure { Toast.makeText(context, it.message, Toast.LENGTH_LONG).show() }
@@ -721,15 +784,15 @@ fun OwnerDashboardScreen(
                 showInventoryForm = false
                 editingInventoryItem = null
             },
-            onSave = { courtId, name, category, unit, imp, sell, stk, minA ->
+            onSave = { courtId, name, category, unit, imp, sell, stk, minA, sku, barcode, sup ->
                 val editing = editingInventoryItem
                 showInventoryForm = false
                 editingInventoryItem = null
                 scope.launch {
                     val res = if (editing == null) {
-                        StaffOwnerApiClient.createInventoryItem(courtId, name, category, unit, imp, sell, stk, minA)
+                        StaffOwnerApiClient.createInventoryItem(courtId, name, category, unit, imp, sell, stk, minA, sku, barcode, sup)
                     } else {
-                        StaffOwnerApiClient.updateInventoryItem(editing.id, name, category, unit, imp, sell, minA)
+                        StaffOwnerApiClient.updateInventoryItem(editing.id, name, category, unit, imp, sell, minA, sku, barcode, sup)
                     }
                     res.onSuccess {
                         Toast.makeText(context, if (editing == null) "Đã thêm $name vào kho" else "Đã cập nhật $name", Toast.LENGTH_SHORT).show()
@@ -835,10 +898,12 @@ private fun OwnerBottomBar(
 @Composable
 private fun OwnerOverviewTab(
     overview: OwnerOverviewData?,
+    inventoryStats: OwnerInventoryStatsData?,
     selectedPeriod: String,
     onSelectPeriod: (String) -> Unit,
     pendingReports: Int,
     onGoToReports: () -> Unit,
+    onGoToInventory: () -> Unit,
 ) {
     if (overview == null) {
         Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -847,6 +912,7 @@ private fun OwnerOverviewTab(
         return
     }
     var filter by remember { mutableStateOf("ALL") }
+    var statsDimension by remember { mutableStateOf("BRANCH") } // BRANCH | FIELD | SLOT | SOURCE
 
     val filteredBookings = remember(overview.bookings, filter) {
         when (filter) {
@@ -1034,43 +1100,208 @@ private fun OwnerOverviewTab(
             }
         }
 
-        if (overview.branchRevenues.isNotEmpty()) {
-            item {
-                Column {
-                    ProSectionHeader("Doanh thu theo chi nhánh (${overview.branchRevenues.size})")
-                    Spacer(Modifier.height(8.dp))
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        items(overview.branchRevenues) { br ->
-                            ProCard(modifier = Modifier.width(215.dp)) {
-                                Column(Modifier.padding(14.dp)) {
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                ProSectionHeader("Thống kê doanh thu đa chiều")
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    val dimensions = listOf(
+                        "BRANCH" to "Theo chi nhánh",
+                        "FIELD" to "Theo sân con",
+                        "SLOT" to "Theo khung giờ",
+                        "SOURCE" to "Nguồn thu & Kho",
+                    )
+                    items(dimensions) { (code, label) ->
+                        FilterChip(
+                            selected = statsDimension == code,
+                            onClick = { statsDimension = code },
+                            label = { Text(label, fontSize = 12.sp) }
+                        )
+                    }
+                }
+            }
+        }
+
+        when (statsDimension) {
+            "BRANCH" -> {
+                val sortedBranches = overview.branchRevenues.sortedByDescending { it.revenue }
+                val maxRev = sortedBranches.maxOfOrNull { it.revenue }.takeIf { (it ?: 0L) > 0L } ?: 1L
+                if (sortedBranches.isEmpty()) {
+                    item {
+                        EmptyStateCard(title = "Chưa có chi nhánh", subtitle = "Thêm chi nhánh sân để theo dõi doanh thu.")
+                    }
+                } else {
+                    items(sortedBranches, key = { "stat_br_${it.courtId}" }) { br ->
+                        val ratio = (br.revenue.toFloat() / maxRev.toFloat()).coerceIn(0f, 1f)
+                        ProCard {
+                            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Row(
+                                    Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(Modifier.weight(1f)) {
+                                        Text(br.courtName, fontWeight = FontWeight.Bold, fontSize = 14.5.sp, color = ProColors.Ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        Text("${br.sportType} · ${br.fieldCount} sân con · ${br.bookingCount} đơn", fontSize = 11.5.sp, color = ProColors.Muted)
+                                    }
+                                    Text("${br.revenue.toInt().vnd()} đ", fontWeight = FontWeight.Bold, fontSize = 15.5.sp, color = ProColors.Primary)
+                                }
+                                LinearProgressIndicator(
+                                    progress = { ratio },
+                                    color = ProColors.Primary,
+                                    trackColor = ProColors.Surface,
+                                    modifier = Modifier.fillMaxWidth().height(7.dp).clip(RoundedCornerShape(6.dp))
+                                )
+                                Row(
+                                    Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(ProColors.Surface)
+                                        .padding(horizontal = 10.dp, vertical = 6.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text("Tiền sân: ${br.courtRevenue.toInt().vnd()} đ", fontSize = 11.5.sp, color = ProColors.SubInk, fontWeight = FontWeight.Medium)
+                                    Text("Dịch vụ/POS: ${br.posRevenue.toInt().vnd()} đ", fontSize = 11.5.sp, color = ProColors.Emerald, fontWeight = FontWeight.SemiBold)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            "FIELD" -> {
+                val fields = overview.fieldRevenues
+                val maxFieldRev = fields.maxOfOrNull { it.totalRevenue }.takeIf { (it ?: 0L) > 0L } ?: 1L
+                if (fields.isEmpty()) {
+                    item {
+                        EmptyStateCard(
+                            title = "Chưa có dữ liệu doanh thu theo sân con",
+                            subtitle = "Khi có đơn đặt sân trong kỳ được chọn, hệ thống sẽ xếp hạng từng sân con tại đây."
+                        )
+                    }
+                } else {
+                    items(fields.withIndex().toList(), key = { "${it.value.courtId}_${it.value.fieldName}_${it.index}" }) { (idx, f) ->
+                        val ratio = (f.totalRevenue.toFloat() / maxFieldRev.toFloat()).coerceIn(0f, 1f)
+                        ProCard {
+                            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Row(
+                                    Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(28.dp)
+                                                .clip(RoundedCornerShape(8.dp))
+                                                .background(if (idx == 0) ProColors.AmberBg else ProColors.PrimarySoft),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text("#${idx + 1}", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = if (idx == 0) ProColors.Amber else ProColors.Primary)
+                                        }
+                                        Spacer(Modifier.width(10.dp))
+                                        Column(Modifier.weight(1f)) {
+                                            Text(f.fieldName, fontWeight = FontWeight.Bold, fontSize = 14.5.sp, color = ProColors.Ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                            Text("${f.courtName} · ${f.bookingCount} lượt đặt", fontSize = 11.5.sp, color = ProColors.Muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        }
+                                    }
+                                    Text("${f.totalRevenue.toInt().vnd()} đ", fontWeight = FontWeight.Bold, fontSize = 15.sp, color = ProColors.Primary)
+                                }
+                                LinearProgressIndicator(
+                                    progress = { ratio },
+                                    color = ProColors.Emerald,
+                                    trackColor = ProColors.Surface,
+                                    modifier = Modifier.fillMaxWidth().height(7.dp).clip(RoundedCornerShape(6.dp))
+                                )
+                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                    Text("Tiền thuê sân: ${f.courtRevenue.toInt().vnd()} đ", fontSize = 11.5.sp, color = ProColors.SubInk)
+                                    Text("Dịch vụ: ${f.serviceRevenue.toInt().vnd()} đ", fontSize = 11.5.sp, color = ProColors.Emerald, fontWeight = FontWeight.Medium)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            "SLOT" -> {
+                val slots = overview.timeSlotRevenues
+                val totalSlotRev = slots.sumOf { it.revenue }.coerceAtLeast(1L)
+                item {
+                    ProCard {
+                        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            if (slots.isEmpty()) {
+                                Text("Chưa có dữ liệu khung giờ", fontSize = 13.sp, color = ProColors.Muted)
+                            } else {
+                                slots.forEach { s ->
+                                    val pct = ((s.revenue * 100.0) / totalSlotRev).toInt()
+                                    val ratio = (s.revenue.toFloat() / totalSlotRev.toFloat()).coerceIn(0f, 1f)
+                                    val barColor = when (s.slot) {
+                                        "MORNING" -> ProColors.Amber
+                                        "AFTERNOON" -> ProColors.Sky
+                                        else -> ProColors.Primary
+                                    }
+                                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                            Text(s.label, fontWeight = FontWeight.Bold, fontSize = 13.5.sp, color = ProColors.Ink)
+                                            Text("${s.revenue.toInt().vnd()} đ ($pct%)", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = barColor)
+                                        }
+                                        LinearProgressIndicator(
+                                            progress = { ratio },
+                                            color = barColor,
+                                            trackColor = ProColors.Surface,
+                                            modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(6.dp))
+                                        )
+                                        Text("${s.bookingCount} đơn đặt sân trong khung giờ này", fontSize = 11.5.sp, color = ProColors.SubInk)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            else -> {
+                val sumSrc = (overview.courtRevenue + overview.posRevenue).coerceAtLeast(1L)
+                val courtPct = ((overview.courtRevenue * 100.0) / sumSrc).toInt()
+                val posPct = (100 - courtPct).coerceAtLeast(0)
+                item {
+                    ProCard {
+                        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Text("Cơ cấu nguồn doanh thu", fontWeight = FontWeight.Bold, fontSize = 14.5.sp, color = ProColors.Ink)
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column {
+                                    Text("Tiền thuê sân ($courtPct%)", fontSize = 12.sp, color = ProColors.SubInk)
+                                    Text("${overview.courtRevenue.toInt().vnd()} đ", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = ProColors.Primary)
+                                }
+                                Column(horizontalAlignment = Alignment.End) {
+                                    Text("Dịch vụ & Quầy POS ($posPct%)", fontSize = 12.sp, color = ProColors.SubInk)
+                                    Text("${overview.posRevenue.toInt().vnd()} đ", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = ProColors.Emerald)
+                                }
+                            }
+                            LinearProgressIndicator(
+                                progress = { (overview.courtRevenue.toFloat() / sumSrc.toFloat()).coerceIn(0f, 1f) },
+                                color = ProColors.Primary,
+                                trackColor = ProColors.Emerald,
+                                modifier = Modifier.fillMaxWidth().height(9.dp).clip(RoundedCornerShape(999.dp))
+                            )
+                            HorizontalDivider(color = ProColors.Border)
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column {
+                                    Text("Kho hàng & Lợi nhuận gộp POS", fontWeight = FontWeight.Bold, fontSize = 13.5.sp, color = ProColors.Ink)
                                     Text(
-                                        br.courtName,
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 14.sp,
-                                        color = ProColors.Ink,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
-                                    )
-                                    Text(
-                                        "${br.sportType} · ${br.fieldCount} sân con",
+                                        "Lãi gộp kho: +${(inventoryStats?.grossProfit ?: 0L).toInt().vnd()} đ · Tồn vốn: ${(inventoryStats?.totalStockValue ?: 0L).toInt().vnd()} đ",
                                         fontSize = 11.5.sp,
-                                        color = ProColors.Muted,
-                                        maxLines = 1
+                                        color = ProColors.SubInk
                                     )
-                                    Spacer(Modifier.height(8.dp))
-                                    Text(
-                                        "${br.revenue.toInt().vnd()} đ",
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 16.sp,
-                                        color = ProColors.Primary
-                                    )
-                                    Spacer(Modifier.height(3.dp))
-                                    Text(
-                                        "${br.bookingCount} đơn · ${br.activeCount} đang đá",
-                                        fontSize = 11.5.sp,
-                                        color = if (br.activeCount > 0) ProColors.Emerald else ProColors.SubInk,
-                                        fontWeight = FontWeight.Medium
-                                    )
+                                }
+                                TextButton(onClick = onGoToInventory) {
+                                    Text("Xem kho →", fontWeight = FontWeight.Bold, color = ProColors.Primary)
                                 }
                             }
                         }

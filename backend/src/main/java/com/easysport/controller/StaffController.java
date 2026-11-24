@@ -609,6 +609,9 @@ public class StaffController {
             m.put("stockQuantity", item.getStockQuantity());
             m.put("minAlertThreshold", item.getMinAlertThreshold());
             m.put("lowStock", item.isLowStock());
+            m.put("sku", item.getSku() != null ? item.getSku() : "");
+            m.put("barcode", item.getBarcode() != null ? item.getBarcode() : "");
+            m.put("supplierName", item.getSupplierName() != null ? item.getSupplierName() : "");
             result.add(m);
         }
         return ResponseEntity.ok(ApiResponse.success("Kho hàng tại chi nhánh", result));
