@@ -7,6 +7,7 @@ import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.border
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -29,6 +30,8 @@ import androidx.compose.material.icons.rounded.Bolt
 import androidx.compose.material.icons.rounded.Call
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Checkroom
+import androidx.compose.material.icons.rounded.ChevronLeft
+import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Payments
 import androidx.compose.material.icons.rounded.QrCode2
@@ -36,6 +39,7 @@ import androidx.compose.material.icons.rounded.Remove
 import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Storefront
+import androidx.compose.material.icons.rounded.Today
 import androidx.compose.material.icons.rounded.WarningAmber
 import androidx.compose.material.icons.rounded.WaterDrop
 import androidx.compose.material3.*
@@ -82,10 +86,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.net.URL
 import java.net.URLEncoder
+import java.time.DayOfWeek
 import java.time.Duration
 import java.time.LocalDate
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
+import java.time.temporal.TemporalAdjusters
 
 private enum class StaffTab(val label: String, val title: String, val icon: ImageVector) {
     PITCHES("Sân bóng", "Sơ đồ sân", Icons.Outlined.SportsSoccer),
@@ -1771,14 +1777,33 @@ private fun StaffShiftTab(
         shiftBookings.size
     }
 
-    val weeklyHours = remember(shifts, today) {
-        val monday = today.minusDays(((today.dayOfWeek.value - 1).toLong()))
-        val sunday = monday.plusDays(6)
+    val actualCurrentMonday = remember(today) {
+        today.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
+    }
+    var currentWeekMonday by remember { mutableStateOf(actualCurrentMonday) }
+    var selectedDateFilter by remember { mutableStateOf<String?>(todayStr) }
+
+    val weeklyHours = remember(shifts, currentWeekMonday) {
+        val sunday = currentWeekMonday.plusDays(6)
         shifts.sumOf { s ->
             val d = runCatching { LocalDate.parse(s.shiftDate, dateFormatter) }.getOrNull()
-            if (d != null && !d.isBefore(monday) && !d.isAfter(sunday)) {
+            if (d != null && !d.isBefore(currentWeekMonday) && !d.isAfter(sunday)) {
                 parseShiftHours(s.shiftSlot)
             } else 0.0
+        }
+    }
+
+    val displayedShifts = remember(shifts, selectedDateFilter, currentWeekMonday) {
+        when (selectedDateFilter) {
+            "ALL" -> shifts
+            null -> {
+                val sunday = currentWeekMonday.plusDays(6)
+                shifts.filter { s ->
+                    val d = runCatching { LocalDate.parse(s.shiftDate, dateFormatter) }.getOrNull()
+                    d != null && !d.isBefore(currentWeekMonday) && !d.isAfter(sunday)
+                }
+            }
+            else -> shifts.filter { it.shiftDate == selectedDateFilter }
         }
     }
 
@@ -2034,56 +2059,320 @@ private fun StaffShiftTab(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                ProSectionHeader("Lịch làm việc (${shifts.size})", modifier = Modifier.weight(1f))
+                ProSectionHeader("Lịch làm việc", modifier = Modifier.weight(1f))
                 val hoursStr = if (weeklyHours % 1.0 == 0.0) weeklyHours.toInt().toString() else String.format("%.1f", weeklyHours)
                 ProStatusDotPill("Tuần này: ${hoursStr}h/48h", ProColors.Primary, ProColors.Primary, ProColors.PrimarySoft)
             }
         }
 
-        if (shifts.isEmpty()) {
+        item {
+            StaffShiftCalendarCard(
+                currentMonday = currentWeekMonday,
+                selectedDate = selectedDateFilter,
+                todayStr = todayStr,
+                shifts = shifts,
+                onSelectDate = { selectedDateFilter = it },
+                onPrevWeek = { currentWeekMonday = currentWeekMonday.minusWeeks(1) },
+                onNextWeek = { currentWeekMonday = currentWeekMonday.plusWeeks(1) },
+                onResetToday = {
+                    currentWeekMonday = actualCurrentMonday
+                    selectedDateFilter = todayStr
+                }
+            )
+        }
+
+        if (displayedShifts.isEmpty()) {
             item {
+                val emptyTitle = if (selectedDateFilter != null && selectedDateFilter != "ALL") {
+                    "Không có ca trực ngày $selectedDateFilter"
+                } else if (selectedDateFilter == null) {
+                    "Không có ca trực trong tuần này"
+                } else {
+                    "Chưa có ca trực nào được phân"
+                }
+                val emptySub = if (selectedDateFilter != null && selectedDateFilter != "ALL") {
+                    "Bạn không có lịch phân công vào ngày này hoặc được nghỉ."
+                } else {
+                    "Quản lý sẽ xếp lịch ca trực cho bạn tại mục Phân ca NV."
+                }
                 EmptyStateCard(
-                    title = "Chưa có ca trực được phân",
-                    subtitle = "Quản lý sẽ xếp lịch ca trực cho bạn tại mục Phân ca NV."
+                    title = emptyTitle,
+                    subtitle = emptySub,
+                    actionLabel = if (selectedDateFilter != null) "Xem tất cả ca trực" else null,
+                    onAction = if (selectedDateFilter != null) { { selectedDateFilter = "ALL" } } else null
                 )
             }
         } else {
-            items(shifts) { s ->
+            items(displayedShifts) { s ->
+                val isToday = s.shiftDate == todayStr
                 ProCard {
-                    Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Column(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(ProColors.PrimarySoft)
-                                .padding(horizontal = 10.dp, vertical = 8.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Text(s.shiftDate.take(5), fontWeight = FontWeight.Bold, fontSize = 14.sp, color = ProColors.Primary)
-                            Text(s.shiftDate.takeLast(4), fontSize = 10.5.sp, color = ProColors.Muted)
+                    Column(Modifier.padding(14.dp)) {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Column(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(ProColors.PrimarySoft)
+                                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Text(s.shiftDate.take(5), fontWeight = FontWeight.Bold, fontSize = 14.sp, color = ProColors.Primary)
+                                Text(s.shiftDate.takeLast(4), fontSize = 10.5.sp, color = ProColors.Muted)
+                            }
+                            Spacer(Modifier.width(12.dp))
+                            Column(Modifier.weight(1f)) {
+                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                                    Text(s.shiftSlot, fontWeight = FontWeight.Bold, color = ProColors.Ink, fontSize = 14.sp, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Spacer(Modifier.width(6.dp))
+                                    ShiftStatusBadge(s.status)
+                                }
+                                Spacer(Modifier.height(3.dp))
+                                Text("${s.courtName} · ${s.duty}", fontSize = 12.5.sp, color = ProColors.SubInk, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                if (s.checkInTime != null) {
+                                    Text(
+                                        "Chấm công: ${s.checkInTime}${s.checkOutTime?.let { " - $it" } ?: ""}",
+                                        fontSize = 12.sp,
+                                        color = ProColors.Emerald
+                                    )
+                                }
+                                if (s.lateMinutes != null && s.lateMinutes > 0) {
+                                    Text("Vào muộn ${s.lateMinutes} phút", fontSize = 12.sp, color = ProColors.Amber)
+                                }
+                                if (s.notes.isNotEmpty()) Text("Ghi chú: ${s.notes}", fontSize = 12.sp, color = ProColors.Muted)
+                            }
                         }
-                        Spacer(Modifier.width(12.dp))
-                        Column(Modifier.weight(1f)) {
-                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                                Text(s.shiftSlot, fontWeight = FontWeight.Bold, color = ProColors.Ink, fontSize = 14.sp, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Spacer(Modifier.width(6.dp))
-                                ShiftStatusBadge(s.status)
+
+                        if ((s.status == "UPCOMING" && isToday) || s.status == "ACTIVE") {
+                            Spacer(Modifier.height(10.dp))
+                            HorizontalDivider(color = ProColors.Border)
+                            Spacer(Modifier.height(10.dp))
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                                if (s.status == "UPCOMING" && isToday) {
+                                    OutlinedButton(
+                                        onClick = { onClockIn(s.id) },
+                                        shape = RoundedCornerShape(10.dp),
+                                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp)
+                                    ) {
+                                        Text("Chấm công vào ca", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                                    }
+                                } else if (s.status == "ACTIVE") {
+                                    Button(
+                                        onClick = { onClockOut(s) },
+                                        shape = RoundedCornerShape(10.dp),
+                                        colors = ButtonDefaults.buttonColors(containerColor = ProColors.Primary),
+                                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp)
+                                    ) {
+                                        Text("Kết thúc ca", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                    }
+                                }
                             }
-                            Spacer(Modifier.height(3.dp))
-                            Text("${s.courtName} · ${s.duty}", fontSize = 12.5.sp, color = ProColors.SubInk, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                            if (s.checkInTime != null) {
-                                Text(
-                                    "Chấm công: ${s.checkInTime}${s.checkOutTime?.let { " - $it" } ?: ""}",
-                                    fontSize = 12.sp,
-                                    color = ProColors.Emerald
-                                )
-                            }
-                            if (s.lateMinutes != null && s.lateMinutes > 0) {
-                                Text("Vào muộn ${s.lateMinutes} phút", fontSize = 12.sp, color = ProColors.Amber)
-                            }
-                            if (s.notes.isNotEmpty()) Text("Ghi chú: ${s.notes}", fontSize = 12.sp, color = ProColors.Muted)
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+private data class StaffCalendarDay(
+    val date: LocalDate,
+    val dateStr: String,
+    val weekday: String,
+)
+
+@Composable
+private fun StaffShiftCalendarCard(
+    currentMonday: LocalDate,
+    selectedDate: String?,
+    todayStr: String,
+    shifts: List<StaffShiftItem>,
+    onSelectDate: (String?) -> Unit,
+    onPrevWeek: () -> Unit,
+    onNextWeek: () -> Unit,
+    onResetToday: () -> Unit,
+) {
+    val dayMonthFmt = remember { DateTimeFormatter.ofPattern("dd/MM") }
+    val sunday = remember(currentMonday) { currentMonday.plusDays(6) }
+    val dateFormatter = remember { DateTimeFormatter.ofPattern("dd/MM/yyyy") }
+    val isCurrentWeek = remember(currentMonday) {
+        val now = LocalDate.now()
+        val thisMonday = now.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
+        currentMonday == thisMonday
+    }
+
+    val weekDays = remember(currentMonday) {
+        (0L..6L).map { offset ->
+            val d = currentMonday.plusDays(offset)
+            val dStr = d.format(dateFormatter)
+            val wLabel = when (d.dayOfWeek) {
+                DayOfWeek.MONDAY -> "T2"
+                DayOfWeek.TUESDAY -> "T3"
+                DayOfWeek.WEDNESDAY -> "T4"
+                DayOfWeek.THURSDAY -> "T5"
+                DayOfWeek.FRIDAY -> "T6"
+                DayOfWeek.SATURDAY -> "T7"
+                DayOfWeek.SUNDAY -> "CN"
+                else -> ""
+            }
+            StaffCalendarDay(date = d, dateStr = dStr, weekday = wLabel)
+        }
+    }
+
+    ProCard {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            // Header: week navigation
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        text = "Tuần ${currentMonday.format(dayMonthFmt)} - ${sunday.format(dayMonthFmt)}",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.5.sp,
+                        color = ProColors.Ink
+                    )
+                    if (isCurrentWeek) {
+                        ProStatusDotPill(
+                            text = "Tuần này",
+                            dotColor = ProColors.Primary,
+                            textColor = ProColors.Primary,
+                            bgColor = ProColors.PrimarySoft
+                        )
+                    }
+                }
+
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = onPrevWeek, modifier = Modifier.size(32.dp)) {
+                        Icon(
+                            Icons.Rounded.ChevronLeft,
+                            contentDescription = "Tuần trước",
+                            tint = ProColors.SubInk,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    if (!isCurrentWeek) {
+                        IconButton(onClick = onResetToday, modifier = Modifier.size(32.dp)) {
+                            Icon(
+                                Icons.Rounded.Today,
+                                contentDescription = "Về tuần này",
+                                tint = ProColors.Primary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                    IconButton(onClick = onNextWeek, modifier = Modifier.size(32.dp)) {
+                        Icon(
+                            Icons.Rounded.ChevronRight,
+                            contentDescription = "Tuần sau",
+                            tint = ProColors.SubInk,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+            }
+
+            // 7-day strip
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                weekDays.forEach { day ->
+                    val isSelected = selectedDate == day.dateStr
+                    val isToday = day.dateStr == todayStr
+                    val dayShifts = shifts.filter { it.shiftDate == day.dateStr }
+                    val hasActive = dayShifts.any { it.status == "ACTIVE" }
+                    val hasUpcoming = dayShifts.any { it.status == "UPCOMING" }
+                    val hasCompleted = dayShifts.any { it.status == "COMPLETED" }
+
+                    val dotColor = when {
+                        hasActive -> ProColors.Emerald
+                        hasUpcoming -> ProColors.Primary
+                        hasCompleted -> ProColors.Muted
+                        else -> Color.Transparent
+                    }
+
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(
+                                if (isSelected) ProColors.Primary
+                                else if (isToday) ProColors.PrimarySoft.copy(alpha = 0.6f)
+                                else Color.White
+                            )
+                            .border(
+                                width = if (isSelected || isToday) 1.5.dp else 1.dp,
+                                color = if (isSelected) ProColors.Primary else if (isToday) ProColors.Primary.copy(alpha = 0.7f) else ProColors.Border,
+                                shape = RoundedCornerShape(12.dp)
+                            )
+                            .clickable {
+                                if (isSelected) onSelectDate(null) else onSelectDate(day.dateStr)
+                            }
+                            .padding(vertical = 8.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Text(
+                            text = day.weekday,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (isSelected) Color.White.copy(alpha = 0.85f) else ProColors.Muted
+                        )
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            text = day.date.dayOfMonth.toString(),
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (isSelected) Color.White else ProColors.Ink
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        if (dayShifts.isNotEmpty()) {
+                            Box(
+                                modifier = Modifier
+                                    .size(6.dp)
+                                    .clip(CircleShape)
+                                    .background(if (isSelected) Color.White else dotColor)
+                            )
+                        } else {
+                            Spacer(Modifier.size(6.dp))
+                        }
+                    }
+                }
+            }
+
+            // Quick filter chips
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                FilterChip(
+                    selected = selectedDate == null,
+                    onClick = { onSelectDate(null) },
+                    label = { Text("Xem cả tuần", fontSize = 12.sp) },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = ProColors.PrimarySoft,
+                        selectedLabelColor = ProColors.Primary
+                    )
+                )
+                FilterChip(
+                    selected = selectedDate == todayStr,
+                    onClick = {
+                        onResetToday()
+                        onSelectDate(todayStr)
+                    },
+                    label = { Text("Hôm nay", fontSize = 12.sp) },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = ProColors.PrimarySoft,
+                        selectedLabelColor = ProColors.Primary
+                    )
+                )
+                FilterChip(
+                    selected = selectedDate == "ALL",
+                    onClick = { onSelectDate("ALL") },
+                    label = { Text("Tất cả (${shifts.size})", fontSize = 12.sp) },
+                    colors = FilterChipDefaults.filterChipColors(
+                        selectedContainerColor = ProColors.PrimarySoft,
+                        selectedLabelColor = ProColors.Primary
+                    )
+                )
             }
         }
     }
