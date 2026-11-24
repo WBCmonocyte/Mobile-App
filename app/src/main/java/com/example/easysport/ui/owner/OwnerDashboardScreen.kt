@@ -20,6 +20,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ReceiptLong
 import androidx.compose.material.icons.automirrored.rounded.ArrowForward
+import androidx.compose.material.icons.automirrored.rounded.EventNote
 import androidx.compose.material.icons.outlined.Analytics
 import androidx.compose.material.icons.outlined.Group
 import androidx.compose.material.icons.outlined.Inbox
@@ -27,8 +28,10 @@ import androidx.compose.material.icons.outlined.Inventory2
 import androidx.compose.material.icons.outlined.SportsSoccer
 import androidx.compose.material.icons.outlined.SportsTennis
 import androidx.compose.material.icons.outlined.Storefront
+import androidx.compose.material.icons.rounded.AccountBalanceWallet
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.AutoFixHigh
+import androidx.compose.material.icons.rounded.BarChart
 import androidx.compose.material.icons.rounded.ChevronLeft
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Close
@@ -37,7 +40,10 @@ import androidx.compose.material.icons.rounded.Directions
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.ExpandLess
 import androidx.compose.material.icons.rounded.ExpandMore
+import androidx.compose.material.icons.rounded.Group
+import androidx.compose.material.icons.rounded.Home
 import androidx.compose.material.icons.rounded.Info
+import androidx.compose.material.icons.rounded.Inventory2
 import androidx.compose.material.icons.rounded.LocationOn
 import androidx.compose.material.icons.rounded.Lock
 import androidx.compose.material.icons.rounded.LockOpen
@@ -49,6 +55,7 @@ import androidx.compose.material.icons.rounded.PersonAdd
 import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material.icons.rounded.Storefront
+import androidx.compose.material.icons.rounded.WarningAmber
 import androidx.compose.material.icons.rounded.WbSunny
 import androidx.compose.material.icons.rounded.WbTwilight
 import androidx.compose.material3.*
@@ -108,12 +115,14 @@ import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.time.temporal.TemporalAdjusters
 
-private enum class OwnerTab(val label: String, val title: String, val icon: ImageVector) {
-    OVERVIEW("Tổng quan", "Dashboard Chủ Sân", Icons.Outlined.Analytics),
-    SHIFTS("Phân ca NV", "Phân ca nhân viên", Icons.Outlined.Group),
-    REPORTS("Bàn giao két", "Duyệt bàn giao két", Icons.Outlined.Inbox),
-    INVENTORY("Kho hàng", "Quản lý Kho hàng", Icons.Outlined.Inventory2),
-    MANAGE("Quản lý", "Quản lý Sân & NV", Icons.Outlined.Storefront),
+private enum class OwnerScreen(val title: String) {
+    HOME("Trang chủ Chủ Sân"),
+    ANALYTICS("Báo cáo & Thống kê"),
+    INVENTORY("Kho & Hàng hóa"),
+    SHIFTS("Phân ca nhân viên"),
+    REPORTS("Duyệt bàn giao két"),
+    MANAGE("Quản lý Sân & NV"),
+    BOOKINGS("Đơn đặt sân"),
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -126,7 +135,7 @@ fun OwnerDashboardScreen(
     val currentUser by UserStore.currentUser.collectAsState()
     val courts by CourtStore.courts.collectAsState()
 
-    var currentTab by remember { mutableStateOf(OwnerTab.OVERVIEW) }
+    var currentScreen by remember { mutableStateOf(OwnerScreen.HOME) }
     var overview by remember { mutableStateOf<OwnerOverviewData?>(null) }
     var shifts by remember { mutableStateOf<List<StaffShiftItem>>(emptyList()) }
     var staffList by remember { mutableStateOf<List<StaffMemberOption>>(emptyList()) }
@@ -211,29 +220,42 @@ fun OwnerDashboardScreen(
 
     LaunchedEffect(Unit) { refreshAll() }
 
-    BackHandler { showLogoutConfirm = true }
+    BackHandler {
+        if (currentScreen != OwnerScreen.HOME) {
+            currentScreen = OwnerScreen.HOME
+        } else {
+            showLogoutConfirm = true
+        }
+    }
 
     val pendingReportCount = remember(reports, overview) {
         reports.count { it.status == "PENDING" }.takeIf { reports.isNotEmpty() } ?: (overview?.pendingReports ?: 0)
+    }
+    val lowStockCount = remember(inventoryData) {
+        inventoryData?.items?.count { it.lowStock } ?: 0
     }
 
     Scaffold(
         containerColor = ProColors.Canvas,
         topBar = {
             ProTopBar(
-                title = currentTab.title,
+                title = currentScreen.title,
                 subtitle = currentUser?.name ?: "Chủ sân EasySport",
                 roleBadge = "CHỦ SÂN",
                 isRefreshing = isRefreshing,
                 onRefresh = { refreshAll() },
                 onLogout = { showLogoutConfirm = true },
+                onBack = if (currentScreen != OwnerScreen.HOME) {
+                    { currentScreen = OwnerScreen.HOME }
+                } else null,
             )
         },
         bottomBar = {
-            OwnerBottomBar(
-                selected = currentTab,
+            OwnerCompactBottomBar(
+                currentScreen = currentScreen,
                 pendingReportCount = pendingReportCount,
-                onSelected = { currentTab = it }
+                lowStockCount = lowStockCount,
+                onSelect = { currentScreen = it },
             )
         },
     ) { innerPadding ->
@@ -245,20 +267,60 @@ fun OwnerDashboardScreen(
                 .padding(innerPadding)
                 .background(ProColors.Canvas)
         ) {
-            when (currentTab) {
-                OwnerTab.OVERVIEW -> OwnerOverviewTab(
+            when (currentScreen) {
+                OwnerScreen.HOME -> OwnerHomeHub(
+                    overview = overview,
+                    pendingReports = pendingReportCount,
+                    lowStockCount = lowStockCount,
+                    onNavigate = { currentScreen = it },
+                )
+                OwnerScreen.ANALYTICS -> OwnerAnalyticsScreen(
                     overview = overview,
                     inventoryStats = inventoryStats,
+                    inventoryItems = inventoryData?.items ?: emptyList(),
                     selectedPeriod = selectedPeriod,
                     onSelectPeriod = { p ->
                         selectedPeriod = p
-                        refreshAll(targetPeriod = p)
+                        inventoryStatsPeriod = p
+                        refreshAll(targetPeriod = p, targetInvPeriod = p)
                     },
-                    pendingReports = pendingReportCount,
-                    onGoToReports = { currentTab = OwnerTab.REPORTS },
-                    onGoToInventory = { currentTab = OwnerTab.INVENTORY },
+                    selectedBranchId = inventoryBranchId,
+                    onSelectBranch = { bId ->
+                        inventoryBranchId = bId
+                        refreshAll(targetInvBranch = bId)
+                    },
+                    onQuickReorder = { item, suggestedQty ->
+                        restockInitialQty = suggestedQty
+                        restockTarget = item
+                    },
+                    onGoToInventory = { currentScreen = OwnerScreen.INVENTORY },
                 )
-                OwnerTab.SHIFTS -> OwnerShiftsTab(
+                OwnerScreen.INVENTORY -> OwnerInventoryTab(
+                    inventoryData = inventoryData,
+                    branches = overview?.branchRevenues ?: emptyList(),
+                    selectedBranchId = inventoryBranchId,
+                    onSelectBranch = { bId ->
+                        inventoryBranchId = bId
+                        refreshAll(targetInvBranch = bId)
+                    },
+                    onAddItem = {
+                        editingInventoryItem = null
+                        showInventoryForm = true
+                    },
+                    onEditItem = { item ->
+                        editingInventoryItem = item
+                        showInventoryForm = true
+                    },
+                    onRestockItem = {
+                        restockInitialQty = 24
+                        restockTarget = it
+                    },
+                    onAdjustItem = { adjustTarget = it },
+                    onWastageItem = { wastageTarget = it },
+                    onTransferItem = { transferTarget = it },
+                    onDeleteItem = { pendingDeleteInventoryItem = it }
+                )
+                OwnerScreen.SHIFTS -> OwnerShiftsTab(
                     schedule = schedule,
                     courts = courts,
                     selectedBranchId = selectedBranchId,
@@ -281,47 +343,12 @@ fun OwnerDashboardScreen(
                     },
                     onDeleteShift = { pendingDeleteShift = it }
                 )
-                OwnerTab.REPORTS -> OwnerReportsTab(
+                OwnerScreen.REPORTS -> OwnerReportsTab(
                     reports = reports,
                     onConfirmClick = { pendingConfirmReport = it },
                     onRejectClick = { pendingRejectReport = it }
                 )
-                OwnerTab.INVENTORY -> OwnerInventoryTab(
-                    inventoryData = inventoryData,
-                    inventoryStats = inventoryStats,
-                    branches = overview?.branchRevenues ?: emptyList(),
-                    selectedBranchId = inventoryBranchId,
-                    statsPeriod = inventoryStatsPeriod,
-                    onSelectBranch = { bId ->
-                        inventoryBranchId = bId
-                        refreshAll(targetInvBranch = bId)
-                    },
-                    onSelectStatsPeriod = { p ->
-                        inventoryStatsPeriod = p
-                        refreshAll(targetInvPeriod = p)
-                    },
-                    onAddItem = {
-                        editingInventoryItem = null
-                        showInventoryForm = true
-                    },
-                    onEditItem = { item ->
-                        editingInventoryItem = item
-                        showInventoryForm = true
-                    },
-                    onRestockItem = {
-                        restockInitialQty = 24
-                        restockTarget = it
-                    },
-                    onQuickReorder = { item, suggestedQty ->
-                        restockInitialQty = suggestedQty
-                        restockTarget = item
-                    },
-                    onAdjustItem = { adjustTarget = it },
-                    onWastageItem = { wastageTarget = it },
-                    onTransferItem = { transferTarget = it },
-                    onDeleteItem = { pendingDeleteInventoryItem = it }
-                )
-                OwnerTab.MANAGE -> OwnerManageTab(
+                OwnerScreen.MANAGE -> OwnerManageTab(
                     branches = overview?.branchRevenues ?: emptyList(),
                     staffAccounts = staffAccounts,
                     onEditPricing = {
@@ -351,6 +378,7 @@ fun OwnerDashboardScreen(
                         }
                     }
                 )
+                OwnerScreen.BOOKINGS -> OwnerBookingsScreen(overview = overview)
             }
         }
     }
@@ -832,133 +860,97 @@ fun OwnerDashboardScreen(
     }
 }
 
-@Composable
-private fun OwnerBottomBar(
-    selected: OwnerTab,
-    pendingReportCount: Int,
-    onSelected: (OwnerTab) -> Unit,
-) {
-    Surface(color = Color.White, shadowElevation = 10.dp) {
-        Column {
-            HorizontalDivider(color = ProColors.Border)
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .navigationBarsPadding()
-                    .padding(horizontal = 10.dp, vertical = 6.dp),
-            ) {
-                OwnerTab.entries.forEach { tab ->
-                    val active = tab == selected
-                    Column(
-                        modifier = Modifier
-                            .weight(1f)
-                            .clip(RoundedCornerShape(14.dp))
-                            .clickable { onSelected(tab) }
-                            .padding(vertical = 4.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(if (active) ProColors.PrimarySoft else Color.Transparent)
-                                .padding(horizontal = 16.dp, vertical = 5.dp),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            if (tab == OwnerTab.REPORTS && pendingReportCount > 0) {
-                                BadgedBox(badge = { Badge(containerColor = ProColors.Amber) { Text(pendingReportCount.toString()) } }) {
-                                    Icon(
-                                        tab.icon, tab.label,
-                                        tint = if (active) ProColors.Primary else ProColors.Muted,
-                                        modifier = Modifier.size(22.dp),
-                                    )
-                                }
-                            } else {
-                                Icon(
-                                    tab.icon, tab.label,
-                                    tint = if (active) ProColors.Primary else ProColors.Muted,
-                                    modifier = Modifier.size(22.dp),
-                                )
-                            }
-                        }
-                        Spacer(Modifier.height(3.dp))
-                        Text(
-                            text = tab.label,
-                            color = if (active) ProColors.Primary else ProColors.Muted,
-                            fontSize = 11.5.sp,
-                            fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
-                            maxLines = 1,
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
+private data class OwnerMenuOption(
+    val screen: OwnerScreen,
+    val title: String,
+    val subtitle: String,
+    val icon: ImageVector,
+    val iconColor: Color,
+    val iconBg: Color,
+    val badgeCount: Int = 0,
+    val badgeColor: Color = ProColors.Rose,
+)
 
 @Composable
-private fun OwnerOverviewTab(
+private fun OwnerHomeHub(
     overview: OwnerOverviewData?,
-    inventoryStats: OwnerInventoryStatsData?,
-    selectedPeriod: String,
-    onSelectPeriod: (String) -> Unit,
     pendingReports: Int,
-    onGoToReports: () -> Unit,
-    onGoToInventory: () -> Unit,
+    lowStockCount: Int,
+    onNavigate: (OwnerScreen) -> Unit,
 ) {
-    if (overview == null) {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            CircularProgressIndicator(color = ProColors.Primary)
-        }
-        return
-    }
-    var filter by remember { mutableStateOf("ALL") }
-    var statsDimension by remember { mutableStateOf("BRANCH") } // BRANCH | FIELD | SLOT | SOURCE
-
-    val filteredBookings = remember(overview.bookings, filter) {
-        when (filter) {
-            "ACTIVE" -> overview.bookings.filter { it.status == "CHECKED_IN" }
-            "PAID" -> overview.bookings.filter { it.status in listOf("PAID", "DEPOSIT_PAID") }
-            "DONE" -> overview.bookings.filter { it.status == "COMPLETED" }
-            else -> overview.bookings
-        }
-    }
-
-    val cashVal = overview.cashRevenue.coerceAtLeast(0L)
-    val qrVal = overview.qrRevenue.coerceAtLeast(0L)
+    val cashVal = (overview?.cashRevenue ?: 0L).coerceAtLeast(0L)
+    val qrVal = (overview?.qrRevenue ?: 0L).coerceAtLeast(0L)
     val sumChannels = (cashVal + qrVal).coerceAtLeast(1L)
     val cashPct = ((cashVal * 100.0) / sumChannels).toInt()
     val qrPct = (100 - cashPct).coerceAtLeast(0)
-    val periodLabel = when (selectedPeriod) {
-        "TODAY" -> "Hôm nay"
-        "WEEK" -> "Tuần này"
-        "MONTH" -> "Tháng này"
-        else -> "Tất cả thời gian"
-    }
+
+    val menuOptions = listOf(
+        OwnerMenuOption(
+            screen = OwnerScreen.ANALYTICS,
+            title = "Báo cáo Thống kê",
+            subtitle = "Doanh thu, lãi lỗ, đa chiều",
+            icon = Icons.Rounded.BarChart,
+            iconColor = Color(0xFF4F46E5),
+            iconBg = Color(0xFFEEF2FF),
+        ),
+        OwnerMenuOption(
+            screen = OwnerScreen.INVENTORY,
+            title = "Kho & Hàng hóa",
+            subtitle = "Tồn kho, nhập xuất, chuyển",
+            icon = Icons.Rounded.Inventory2,
+            iconColor = ProColors.Emerald,
+            iconBg = ProColors.EmeraldBg,
+            badgeCount = lowStockCount,
+            badgeColor = ProColors.Rose,
+        ),
+        OwnerMenuOption(
+            screen = OwnerScreen.SHIFTS,
+            title = "Phân ca Nhân viên",
+            subtitle = "Lịch trực tuần, gán ca",
+            icon = Icons.Rounded.Group,
+            iconColor = ProColors.Sky,
+            iconBg = ProColors.SkyBg,
+        ),
+        OwnerMenuOption(
+            screen = OwnerScreen.REPORTS,
+            title = "Bàn giao két",
+            subtitle = "Duyệt thu chi, chốt ca",
+            icon = Icons.Rounded.AccountBalanceWallet,
+            iconColor = ProColors.Amber,
+            iconBg = ProColors.AmberBg,
+            badgeCount = pendingReports,
+            badgeColor = ProColors.Amber,
+        ),
+        OwnerMenuOption(
+            screen = OwnerScreen.MANAGE,
+            title = "Quản lý Sân & NV",
+            subtitle = "Chi nhánh, giá sân, nhân sự",
+            icon = Icons.Rounded.Storefront,
+            iconColor = Color(0xFF7C3AED),
+            iconBg = Color(0xFFF3E8FF),
+        ),
+        OwnerMenuOption(
+            screen = OwnerScreen.BOOKINGS,
+            title = "Đơn đặt sân",
+            subtitle = "${overview?.totalBookings ?: 0} đơn · ${overview?.activeBookings ?: 0} đang đá",
+            icon = Icons.AutoMirrored.Rounded.EventNote,
+            iconColor = ProColors.Primary,
+            iconBg = ProColors.PrimarySoft,
+        ),
+    )
 
     LazyColumn(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp)
     ) {
-        item {
-            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                val periods = listOf("ALL" to "Tất cả", "TODAY" to "Hôm nay", "WEEK" to "Tuần này", "MONTH" to "Tháng này")
-                items(periods) { (key, label) ->
-                    FilterChip(
-                        selected = selectedPeriod == key,
-                        onClick = { onSelectPeriod(key) },
-                        label = { Text(label) }
-                    )
-                }
-            }
-        }
-
-        // Hero Revenue Card with Cash vs VietQR visual ratio bar
+        // Quick Financial Hero Card
         item {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(20.dp))
                     .background(ProHeroBrush)
+                    .clickable { onNavigate(OwnerScreen.ANALYTICS) }
                     .padding(18.dp)
             ) {
                 Column {
@@ -967,27 +959,26 @@ private fun OwnerOverviewTab(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("Doanh thu ($periodLabel)", fontSize = 13.sp, color = Color.White.copy(alpha = 0.82f))
+                        Text("Tổng doanh thu hệ thống", fontSize = 13.sp, color = Color.White.copy(alpha = 0.85f))
                         ProStatusDotPill(
-                            text = "Trực tuyến",
+                            text = "Xem thống kê →",
                             dotColor = Color(0xFF34D399),
                             textColor = Color.White,
-                            bgColor = Color.White.copy(alpha = 0.16f)
+                            bgColor = Color.White.copy(alpha = 0.18f)
                         )
                     }
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        "${overview.totalRevenue.toInt().vnd()} đ",
+                        "${(overview?.totalRevenue ?: 0L).toInt().vnd()} đ",
                         fontSize = 28.sp,
                         fontWeight = FontWeight.Bold,
                         color = Color.White
                     )
-                    Spacer(Modifier.height(14.dp))
-                    // Stacked Cash vs VietQR bar
+                    Spacer(Modifier.height(12.dp))
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(8.dp)
+                            .height(7.dp)
                             .clip(RoundedCornerShape(999.dp))
                             .background(Color.White.copy(alpha = 0.2f))
                     ) {
@@ -1010,74 +1001,44 @@ private fun OwnerOverviewTab(
                     }
                     Spacer(Modifier.height(10.dp))
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                        Column {
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                                Box(Modifier.size(8.dp).clip(CircleShape).background(Color(0xFF60A5FA)))
-                                Text("Tiền mặt ($cashPct%)", fontSize = 11.5.sp, color = Color.White.copy(alpha = 0.8f))
-                            }
-                            Text("${cashVal.toInt().vnd()} đ", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color.White)
-                        }
-                        Column(horizontalAlignment = Alignment.End) {
-                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                                Box(Modifier.size(8.dp).clip(CircleShape).background(Color(0xFF34D399)))
-                                Text("VietQR ($qrPct%)", fontSize = 11.5.sp, color = Color.White.copy(alpha = 0.8f))
-                            }
-                            Text("${qrVal.toInt().vnd()} đ", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color(0xFF6EE7B7))
-                        }
+                        Text("Tiền mặt ($cashPct%): ${cashVal.toInt().vnd()} đ", fontSize = 11.5.sp, color = Color.White.copy(alpha = 0.9f))
+                        Text("VietQR ($qrPct%): ${qrVal.toInt().vnd()} đ", fontSize = 11.5.sp, color = Color(0xFF6EE7B7), fontWeight = FontWeight.SemiBold)
                     }
                 }
             }
         }
 
-        // 2x2 KPI Grid
+        // Quick 3-stat mini strip
         item {
-            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    ProKpiCard(
-                        icon = Icons.AutoMirrored.Outlined.ReceiptLong,
-                        iconTint = ProColors.Primary,
-                        iconBg = ProColors.PrimarySoft,
-                        value = "${overview.totalBookings} đơn",
-                        label = "Tổng đơn đặt sân",
-                        modifier = Modifier.weight(1f)
-                    )
-                    ProKpiCard(
-                        icon = Icons.Outlined.SportsSoccer,
-                        iconTint = ProColors.Emerald,
-                        iconBg = ProColors.EmeraldBg,
-                        value = "${overview.activeBookings} sân",
-                        label = "Đang hoạt động",
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    ProKpiCard(
-                        icon = Icons.Rounded.Storefront,
-                        iconTint = ProColors.Sky,
-                        iconBg = ProColors.SkyBg,
-                        value = "${overview.totalCourts} cụm",
-                        label = "Cụm sân quản lý",
-                        modifier = Modifier.weight(1f)
-                    )
-                    ProKpiCard(
-                        icon = Icons.Rounded.Payments,
-                        iconTint = if (pendingReports > 0) ProColors.Amber else ProColors.Emerald,
-                        iconBg = if (pendingReports > 0) ProColors.AmberBg else ProColors.EmeraldBg,
-                        value = "$pendingReports ca",
-                        label = "Két chờ duyệt",
-                        modifier = Modifier.weight(1f),
-                        onClick = onGoToReports
-                    )
-                }
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                ProKpiCard(
+                    icon = Icons.Outlined.SportsSoccer,
+                    iconTint = ProColors.Emerald,
+                    iconBg = ProColors.EmeraldBg,
+                    value = "${overview?.activeBookings ?: 0} sân",
+                    label = "Đang hoạt động",
+                    modifier = Modifier.weight(1f),
+                    onClick = { onNavigate(OwnerScreen.BOOKINGS) }
+                )
+                ProKpiCard(
+                    icon = Icons.Rounded.Storefront,
+                    iconTint = ProColors.Sky,
+                    iconBg = ProColors.SkyBg,
+                    value = "${overview?.totalCourts ?: 0} cụm",
+                    label = "Chi nhánh sân",
+                    modifier = Modifier.weight(1f),
+                    onClick = { onNavigate(OwnerScreen.MANAGE) }
+                )
             }
         }
 
+        // Actionable Alerts
         if (pendingReports > 0) {
             item {
                 ProCard(
                     accentBorderColor = ProColors.Amber.copy(alpha = 0.45f),
                     containerColor = ProColors.AmberBg,
-                    onClick = onGoToReports
+                    onClick = { onNavigate(OwnerScreen.REPORTS) }
                 ) {
                     Row(
                         modifier = Modifier.padding(14.dp),
@@ -1100,219 +1061,246 @@ private fun OwnerOverviewTab(
             }
         }
 
-        item {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                ProSectionHeader("Thống kê doanh thu đa chiều")
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    val dimensions = listOf(
-                        "BRANCH" to "Theo chi nhánh",
-                        "FIELD" to "Theo sân con",
-                        "SLOT" to "Theo khung giờ",
-                        "SOURCE" to "Nguồn thu & Kho",
-                    )
-                    items(dimensions) { (code, label) ->
-                        FilterChip(
-                            selected = statsDimension == code,
-                            onClick = { statsDimension = code },
-                            label = { Text(label, fontSize = 12.sp) }
-                        )
+        if (lowStockCount > 0) {
+            item {
+                ProCard(
+                    accentBorderColor = ProColors.Rose.copy(alpha = 0.4f),
+                    containerColor = ProColors.RoseBg,
+                    onClick = { onNavigate(OwnerScreen.INVENTORY) }
+                ) {
+                    Row(
+                        modifier = Modifier.padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier.size(38.dp).clip(CircleShape).background(ProColors.Rose.copy(alpha = 0.14f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(Icons.Rounded.WarningAmber, contentDescription = null, tint = ProColors.Rose, modifier = Modifier.size(20.dp))
+                        }
+                        Spacer(Modifier.width(12.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text("$lowStockCount mặt hàng sắp hết / hết tồn", fontWeight = FontWeight.Bold, color = ProColors.Ink, fontSize = 14.sp)
+                            Text("Bấm vào Kho hàng để nhập bổ sung kịp thời", color = ProColors.Rose, fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                        }
+                        Icon(Icons.AutoMirrored.Rounded.ArrowForward, contentDescription = null, tint = ProColors.Rose)
                     }
                 }
             }
         }
 
-        when (statsDimension) {
-            "BRANCH" -> {
-                val sortedBranches = overview.branchRevenues.sortedByDescending { it.revenue }
-                val maxRev = sortedBranches.maxOfOrNull { it.revenue }.takeIf { (it ?: 0L) > 0L } ?: 1L
-                if (sortedBranches.isEmpty()) {
-                    item {
-                        EmptyStateCard(title = "Chưa có chi nhánh", subtitle = "Thêm chi nhánh sân để theo dõi doanh thu.")
-                    }
-                } else {
-                    items(sortedBranches, key = { "stat_br_${it.courtId}" }) { br ->
-                        val ratio = (br.revenue.toFloat() / maxRev.toFloat()).coerceIn(0f, 1f)
-                        ProCard {
-                            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Row(
-                                    Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Column(Modifier.weight(1f)) {
-                                        Text(br.courtName, fontWeight = FontWeight.Bold, fontSize = 14.5.sp, color = ProColors.Ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                        Text("${br.sportType} · ${br.fieldCount} sân con · ${br.bookingCount} đơn", fontSize = 11.5.sp, color = ProColors.Muted)
-                                    }
-                                    Text("${br.revenue.toInt().vnd()} đ", fontWeight = FontWeight.Bold, fontSize = 15.5.sp, color = ProColors.Primary)
-                                }
-                                LinearProgressIndicator(
-                                    progress = { ratio },
-                                    color = ProColors.Primary,
-                                    trackColor = ProColors.Surface,
-                                    modifier = Modifier.fillMaxWidth().height(7.dp).clip(RoundedCornerShape(6.dp))
-                                )
-                                Row(
-                                    Modifier
-                                        .fillMaxWidth()
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .background(ProColors.Surface)
-                                        .padding(horizontal = 10.dp, vertical = 6.dp),
-                                    horizontalArrangement = Arrangement.SpaceBetween
-                                ) {
-                                    Text("Tiền sân: ${br.courtRevenue.toInt().vnd()} đ", fontSize = 11.5.sp, color = ProColors.SubInk, fontWeight = FontWeight.Medium)
-                                    Text("Dịch vụ/POS: ${br.posRevenue.toInt().vnd()} đ", fontSize = 11.5.sp, color = ProColors.Emerald, fontWeight = FontWeight.SemiBold)
-                                }
-                            }
-                        }
-                    }
+        // Grid Menu Chức năng (Phone-style Dashboard Grid)
+        item {
+            ProSectionHeader("Danh mục chức năng")
+        }
+
+        val rows = menuOptions.chunked(2)
+        items(rows) { rowItems ->
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                rowItems.forEach { opt ->
+                    OwnerHubTile(
+                        option = opt,
+                        onClick = { onNavigate(opt.screen) },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                if (rowItems.size == 1) {
+                    Spacer(Modifier.weight(1f))
                 }
             }
+        }
+    }
+}
 
-            "FIELD" -> {
-                val fields = overview.fieldRevenues
-                val maxFieldRev = fields.maxOfOrNull { it.totalRevenue }.takeIf { (it ?: 0L) > 0L } ?: 1L
-                if (fields.isEmpty()) {
-                    item {
-                        EmptyStateCard(
-                            title = "Chưa có dữ liệu doanh thu theo sân con",
-                            subtitle = "Khi có đơn đặt sân trong kỳ được chọn, hệ thống sẽ xếp hạng từng sân con tại đây."
-                        )
+@Composable
+private fun OwnerCompactBottomBar(
+    currentScreen: OwnerScreen,
+    pendingReportCount: Int,
+    lowStockCount: Int,
+    onSelect: (OwnerScreen) -> Unit,
+) {
+    val navItems = listOf(
+        Triple(OwnerScreen.HOME, "Trang chủ", Icons.Rounded.Home),
+        Triple(OwnerScreen.ANALYTICS, "Thống kê", Icons.Rounded.BarChart),
+        Triple(OwnerScreen.INVENTORY, "Kho hàng", Icons.Rounded.Inventory2),
+        Triple(OwnerScreen.REPORTS, "Két tiền", Icons.Rounded.AccountBalanceWallet),
+    )
+
+    Surface(color = Color.White, shadowElevation = 10.dp) {
+        Column {
+            HorizontalDivider(color = ProColors.Border)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .navigationBarsPadding()
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+            ) {
+                navItems.forEach { (screen, label, icon) ->
+                    val active = currentScreen == screen
+                    val badgeNum = when (screen) {
+                        OwnerScreen.REPORTS -> pendingReportCount
+                        OwnerScreen.INVENTORY -> lowStockCount
+                        else -> 0
                     }
-                } else {
-                    items(fields.withIndex().toList(), key = { "${it.value.courtId}_${it.value.fieldName}_${it.index}" }) { (idx, f) ->
-                        val ratio = (f.totalRevenue.toFloat() / maxFieldRev.toFloat()).coerceIn(0f, 1f)
-                        ProCard {
-                            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                                Row(
-                                    Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
+                    val badgeColor = if (screen == OwnerScreen.REPORTS) ProColors.Amber else ProColors.Rose
+
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(14.dp))
+                            .clickable { onSelect(screen) }
+                            .padding(vertical = 4.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(if (active) ProColors.PrimarySoft else Color.Transparent)
+                                .padding(horizontal = 16.dp, vertical = 5.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            if (badgeNum > 0) {
+                                BadgedBox(
+                                    badge = {
+                                        Badge(containerColor = badgeColor) {
+                                            Text(badgeNum.toString(), color = Color.White)
+                                        }
+                                    }
                                 ) {
-                                    Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-                                        Box(
-                                            modifier = Modifier
-                                                .size(28.dp)
-                                                .clip(RoundedCornerShape(8.dp))
-                                                .background(if (idx == 0) ProColors.AmberBg else ProColors.PrimarySoft),
-                                            contentAlignment = Alignment.Center
-                                        ) {
-                                            Text("#${idx + 1}", fontWeight = FontWeight.Bold, fontSize = 12.sp, color = if (idx == 0) ProColors.Amber else ProColors.Primary)
-                                        }
-                                        Spacer(Modifier.width(10.dp))
-                                        Column(Modifier.weight(1f)) {
-                                            Text(f.fieldName, fontWeight = FontWeight.Bold, fontSize = 14.5.sp, color = ProColors.Ink, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                            Text("${f.courtName} · ${f.bookingCount} lượt đặt", fontSize = 11.5.sp, color = ProColors.Muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                        }
-                                    }
-                                    Text("${f.totalRevenue.toInt().vnd()} đ", fontWeight = FontWeight.Bold, fontSize = 15.sp, color = ProColors.Primary)
-                                }
-                                LinearProgressIndicator(
-                                    progress = { ratio },
-                                    color = ProColors.Emerald,
-                                    trackColor = ProColors.Surface,
-                                    modifier = Modifier.fillMaxWidth().height(7.dp).clip(RoundedCornerShape(6.dp))
-                                )
-                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                    Text("Tiền thuê sân: ${f.courtRevenue.toInt().vnd()} đ", fontSize = 11.5.sp, color = ProColors.SubInk)
-                                    Text("Dịch vụ: ${f.serviceRevenue.toInt().vnd()} đ", fontSize = 11.5.sp, color = ProColors.Emerald, fontWeight = FontWeight.Medium)
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            "SLOT" -> {
-                val slots = overview.timeSlotRevenues
-                val totalSlotRev = slots.sumOf { it.revenue }.coerceAtLeast(1L)
-                item {
-                    ProCard {
-                        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                            if (slots.isEmpty()) {
-                                Text("Chưa có dữ liệu khung giờ", fontSize = 13.sp, color = ProColors.Muted)
-                            } else {
-                                slots.forEach { s ->
-                                    val pct = ((s.revenue * 100.0) / totalSlotRev).toInt()
-                                    val ratio = (s.revenue.toFloat() / totalSlotRev.toFloat()).coerceIn(0f, 1f)
-                                    val barColor = when (s.slot) {
-                                        "MORNING" -> ProColors.Amber
-                                        "AFTERNOON" -> ProColors.Sky
-                                        else -> ProColors.Primary
-                                    }
-                                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                                            Text(s.label, fontWeight = FontWeight.Bold, fontSize = 13.5.sp, color = ProColors.Ink)
-                                            Text("${s.revenue.toInt().vnd()} đ ($pct%)", fontWeight = FontWeight.Bold, fontSize = 13.sp, color = barColor)
-                                        }
-                                        LinearProgressIndicator(
-                                            progress = { ratio },
-                                            color = barColor,
-                                            trackColor = ProColors.Surface,
-                                            modifier = Modifier.fillMaxWidth().height(8.dp).clip(RoundedCornerShape(6.dp))
-                                        )
-                                        Text("${s.bookingCount} đơn đặt sân trong khung giờ này", fontSize = 11.5.sp, color = ProColors.SubInk)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            else -> {
-                val sumSrc = (overview.courtRevenue + overview.posRevenue).coerceAtLeast(1L)
-                val courtPct = ((overview.courtRevenue * 100.0) / sumSrc).toInt()
-                val posPct = (100 - courtPct).coerceAtLeast(0)
-                item {
-                    ProCard {
-                        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Text("Cơ cấu nguồn doanh thu", fontWeight = FontWeight.Bold, fontSize = 14.5.sp, color = ProColors.Ink)
-                            Row(
-                                Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween
-                            ) {
-                                Column {
-                                    Text("Tiền thuê sân ($courtPct%)", fontSize = 12.sp, color = ProColors.SubInk)
-                                    Text("${overview.courtRevenue.toInt().vnd()} đ", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = ProColors.Primary)
-                                }
-                                Column(horizontalAlignment = Alignment.End) {
-                                    Text("Dịch vụ & Quầy POS ($posPct%)", fontSize = 12.sp, color = ProColors.SubInk)
-                                    Text("${overview.posRevenue.toInt().vnd()} đ", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = ProColors.Emerald)
-                                }
-                            }
-                            LinearProgressIndicator(
-                                progress = { (overview.courtRevenue.toFloat() / sumSrc.toFloat()).coerceIn(0f, 1f) },
-                                color = ProColors.Primary,
-                                trackColor = ProColors.Emerald,
-                                modifier = Modifier.fillMaxWidth().height(9.dp).clip(RoundedCornerShape(999.dp))
-                            )
-                            HorizontalDivider(color = ProColors.Border)
-                            Row(
-                                Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column {
-                                    Text("Kho hàng & Lợi nhuận gộp POS", fontWeight = FontWeight.Bold, fontSize = 13.5.sp, color = ProColors.Ink)
-                                    Text(
-                                        "Lãi gộp kho: +${(inventoryStats?.grossProfit ?: 0L).toInt().vnd()} đ · Tồn vốn: ${(inventoryStats?.totalStockValue ?: 0L).toInt().vnd()} đ",
-                                        fontSize = 11.5.sp,
-                                        color = ProColors.SubInk
+                                    Icon(
+                                        imageVector = icon,
+                                        contentDescription = label,
+                                        tint = if (active) ProColors.Primary else ProColors.Muted,
+                                        modifier = Modifier.size(22.dp),
                                     )
                                 }
-                                TextButton(onClick = onGoToInventory) {
-                                    Text("Xem kho →", fontWeight = FontWeight.Bold, color = ProColors.Primary)
-                                }
+                            } else {
+                                Icon(
+                                    imageVector = icon,
+                                    contentDescription = label,
+                                    tint = if (active) ProColors.Primary else ProColors.Muted,
+                                    modifier = Modifier.size(22.dp),
+                                )
                             }
                         }
+                        Spacer(Modifier.height(3.dp))
+                        Text(
+                            text = label,
+                            color = if (active) ProColors.Primary else ProColors.Muted,
+                            fontSize = 11.5.sp,
+                            fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
+                            maxLines = 1,
+                        )
                     }
                 }
             }
         }
+    }
+}
 
+@Composable
+private fun OwnerHubTile(
+    option: OwnerMenuOption,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        color = Color.White,
+        shape = RoundedCornerShape(20.dp),
+        border = BorderStroke(1.dp, ProColors.Border),
+        shadowElevation = 2.dp,
+        modifier = modifier
+            .clip(RoundedCornerShape(20.dp))
+            .clickable(onClick = onClick)
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.Top
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(50.dp)
+                        .clip(RoundedCornerShape(15.dp))
+                        .background(option.iconBg),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = option.icon,
+                        contentDescription = option.title,
+                        tint = option.iconColor,
+                        modifier = Modifier.size(27.dp)
+                    )
+                }
+                if (option.badgeCount > 0) {
+                    Surface(
+                        color = option.badgeColor,
+                        shape = RoundedCornerShape(999.dp)
+                    ) {
+                        Text(
+                            text = "${option.badgeCount}",
+                            color = Color.White,
+                            fontSize = 11.5.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+                        )
+                    }
+                }
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text(
+                    text = option.title,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 15.sp,
+                    color = ProColors.Ink,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = option.subtitle,
+                    fontSize = 12.sp,
+                    color = ProColors.Muted,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    lineHeight = 16.sp
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun OwnerBookingsScreen(overview: OwnerOverviewData?) {
+    if (overview == null) {
+        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator(color = ProColors.Primary)
+        }
+        return
+    }
+    var filter by remember { mutableStateOf("ALL") }
+    val filteredBookings = remember(overview.bookings, filter) {
+        when (filter) {
+            "ACTIVE" -> overview.bookings.filter { it.status == "CHECKED_IN" }
+            "PAID" -> overview.bookings.filter { it.status in listOf("PAID", "DEPOSIT_PAID") }
+            "DONE" -> overview.bookings.filter { it.status == "COMPLETED" }
+            else -> overview.bookings
+        }
+    }
+
+    LazyColumn(
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
         item {
             Column {
-                ProSectionHeader("Đơn đặt sân gần đây (${filteredBookings.size})")
+                ProSectionHeader("Danh sách đơn đặt sân (${filteredBookings.size})")
                 Spacer(Modifier.height(8.dp))
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     val filters = listOf("ALL" to "Tất cả", "ACTIVE" to "Đang đá", "PAID" to "Đã đặt/cọc", "DONE" to "Hoàn tất")
