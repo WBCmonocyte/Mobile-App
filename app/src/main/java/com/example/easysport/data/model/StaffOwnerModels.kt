@@ -182,3 +182,46 @@ data class OwnerOverviewData(
     val bookings: List<StaffBookingItem>,
     val branchRevenues: List<BranchRevenueItem> = emptyList(),
 )
+
+data class InventoryItemModel(
+    val id: String,
+    val courtId: String,
+    val courtName: String,
+    val name: String,
+    val category: String,
+    val unit: String,
+    val importPrice: Int,
+    val sellPrice: Int,
+    val stockQuantity: Int,
+    val minAlertThreshold: Int,
+    val lowStock: Boolean,
+    val updatedAt: String = "",
+)
+
+data class InventoryTransactionModel(
+    val id: String,
+    val itemId: String,
+    val itemName: String,
+    val courtId: String,
+    val type: String,
+    val quantityDelta: Int,
+    val stockAfter: Int,
+    val unitCost: Int,
+    val note: String,
+    val createdBy: String,
+    val createdAt: String,
+)
+
+data class OwnerInventoryData(
+    val items: List<InventoryItemModel>,
+    val transactions: List<InventoryTransactionModel>,
+    val totalItems: Int,
+    val totalUnits: Int,
+    val lowStockCount: Int,
+    val totalStockValue: Long,
+)
+
+data class PosOrderItemRequest(
+    val itemId: String,
+    val quantity: Int,
+)

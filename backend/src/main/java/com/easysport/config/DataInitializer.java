@@ -4,6 +4,8 @@ import com.easysport.entity.Booking;
 import com.easysport.entity.Court;
 import com.easysport.entity.CourtField;
 import com.easysport.entity.CourtResource;
+import com.easysport.entity.InventoryItem;
+import com.easysport.entity.InventoryTransaction;
 import com.easysport.entity.ShiftReport;
 import com.easysport.entity.StaffShift;
 import com.easysport.entity.User;
@@ -11,6 +13,8 @@ import com.easysport.repository.BookingRepository;
 import com.easysport.repository.CourtFieldRepository;
 import com.easysport.repository.CourtRepository;
 import com.easysport.repository.CourtResourceRepository;
+import com.easysport.repository.InventoryItemRepository;
+import com.easysport.repository.InventoryTransactionRepository;
 import com.easysport.repository.ShiftReportRepository;
 import com.easysport.repository.StaffShiftRepository;
 import com.easysport.repository.UserRepository;
@@ -35,6 +39,8 @@ public class DataInitializer implements CommandLineRunner {
     private final BookingRepository bookingRepository;
     private final StaffShiftRepository staffShiftRepository;
     private final ShiftReportRepository shiftReportRepository;
+    private final InventoryItemRepository inventoryItemRepository;
+    private final InventoryTransactionRepository inventoryTransactionRepository;
 
     public DataInitializer(UserRepository userRepository,
                            CourtRepository courtRepository,
@@ -42,7 +48,9 @@ public class DataInitializer implements CommandLineRunner {
                            CourtResourceRepository courtResourceRepository,
                            BookingRepository bookingRepository,
                            StaffShiftRepository staffShiftRepository,
-                           ShiftReportRepository shiftReportRepository) {
+                           ShiftReportRepository shiftReportRepository,
+                           InventoryItemRepository inventoryItemRepository,
+                           InventoryTransactionRepository inventoryTransactionRepository) {
         this.userRepository = userRepository;
         this.courtRepository = courtRepository;
         this.courtFieldRepository = courtFieldRepository;
@@ -50,6 +58,8 @@ public class DataInitializer implements CommandLineRunner {
         this.bookingRepository = bookingRepository;
         this.staffShiftRepository = staffShiftRepository;
         this.shiftReportRepository = shiftReportRepository;
+        this.inventoryItemRepository = inventoryItemRepository;
+        this.inventoryTransactionRepository = inventoryTransactionRepository;
     }
 
     @Override
@@ -370,6 +380,44 @@ public class DataInitializer implements CommandLineRunner {
                     "PENDING",
                     null
             ));
+        }
+
+        // 9. Seed Inventory Items if empty
+        if (inventoryItemRepository.count() == 0) {
+            List<InventoryItem> items = Arrays.asList(
+                    new InventoryItem("inv_tp_revive", "court_thanh_phat", "Sân bóng Thành Phát",
+                            "Revive chanh muối", "DRINK", "chai", 8500, 15000, 48, 12),
+                    new InventoryItem("inv_tp_water", "court_thanh_phat", "Sân bóng Thành Phát",
+                            "Nước khoáng 500ml", "DRINK", "chai", 4000, 10000, 72, 15),
+                    new InventoryItem("inv_tp_bib", "court_thanh_phat", "Sân bóng Thành Phát",
+                            "Thuê bộ áo bib (14c)", "EQUIPMENT", "bộ", 150000, 50000, 8, 2),
+                    new InventoryItem("inv_tp_redbull", "court_thanh_phat", "Sân bóng Thành Phát",
+                            "Redbull tăng lực", "DRINK", "lon", 11000, 20000, 9, 10),
+                    new InventoryItem("inv_tp_ball", "court_thanh_phat", "Sân bóng Thành Phát",
+                            "Bóng đá số 5 Động Lực", "EQUIPMENT", "quả", 320000, 30000, 10, 3),
+                    new InventoryItem("inv_tp_socks", "court_thanh_phat", "Sân bóng Thành Phát",
+                            "Tất bóng đá chống trơn", "ACCESSORY", "đôi", 25000, 45000, 20, 5),
+
+                    new InventoryItem("inv_hg_revive", "court_hoang_gia", "Sân bóng Hoàng Gia",
+                            "Revive chanh muối", "DRINK", "chai", 8500, 15000, 36, 10),
+                    new InventoryItem("inv_hg_water", "court_hoang_gia", "Sân bóng Hoàng Gia",
+                            "Nước khoáng 500ml", "DRINK", "chai", 4000, 10000, 60, 15),
+                    new InventoryItem("inv_hg_bib", "court_hoang_gia", "Sân bóng Hoàng Gia",
+                            "Thuê bộ áo bib (14c)", "EQUIPMENT", "bộ", 150000, 50000, 6, 2),
+                    new InventoryItem("inv_hg_redbull", "court_hoang_gia", "Sân bóng Hoàng Gia",
+                            "Redbull tăng lực", "DRINK", "lon", 11000, 20000, 24, 8)
+            );
+            inventoryItemRepository.saveAll(items);
+
+            inventoryTransactionRepository.saveAll(Arrays.asList(
+                    new InventoryTransaction("tx_seed_1", "inv_tp_revive", "Revive chanh muối", "court_thanh_phat",
+                            "IMPORT", 48, 48, 8500, "Nhập kho đầu kỳ (2 thùng)", "Trần Chủ Sân"),
+                    new InventoryTransaction("tx_seed_2", "inv_tp_water", "Nước khoáng 500ml", "court_thanh_phat",
+                            "IMPORT", 72, 72, 4000, "Nhập kho đầu kỳ (3 thùng)", "Trần Chủ Sân"),
+                    new InventoryTransaction("tx_seed_3", "inv_tp_redbull", "Redbull tăng lực", "court_thanh_phat",
+                            "IMPORT", 9, 9, 11000, "Tồn đầu kỳ (sắp hết, cần nhập thêm)", "Trần Chủ Sân")
+            ));
+            System.out.println(">>> Đã khởi tạo dữ liệu mẫu Kho hàng (InventoryItems & InventoryTransactions)");
         }
     }
 }

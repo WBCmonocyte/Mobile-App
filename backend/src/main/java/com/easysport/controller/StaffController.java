@@ -6,6 +6,8 @@ import com.easysport.entity.Court;
 import com.easysport.entity.CourtField;
 import com.easysport.entity.CourtHoldSlot;
 import com.easysport.entity.CourtResource;
+import com.easysport.entity.InventoryItem;
+import com.easysport.entity.InventoryTransaction;
 import com.easysport.entity.PosSale;
 import com.easysport.entity.ShiftReport;
 import com.easysport.entity.StaffShift;
@@ -15,6 +17,8 @@ import com.easysport.repository.CourtFieldRepository;
 import com.easysport.repository.CourtHoldSlotRepository;
 import com.easysport.repository.CourtRepository;
 import com.easysport.repository.CourtResourceRepository;
+import com.easysport.repository.InventoryItemRepository;
+import com.easysport.repository.InventoryTransactionRepository;
 import com.easysport.repository.PosSaleRepository;
 import com.easysport.repository.ShiftReportRepository;
 import com.easysport.repository.StaffShiftRepository;
@@ -59,6 +63,12 @@ public class StaffController {
     private final CourtResourceRepository courtResourceRepository;
     private final CourtFieldRepository courtFieldRepository;
     private final CourtHoldTransactionService courtHoldTransactionService;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private InventoryItemRepository inventoryItemRepository;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private InventoryTransactionRepository inventoryTransactionRepository;
 
     public StaffController(AuthService authService,
                            BookingRepository bookingRepository,
@@ -434,6 +444,8 @@ public class StaffController {
             }
         }
 
+        deductInventoryForPos(body.get("items"), staff.getFullName(), "Gắn vào đơn sân " + booking.getId());
+
         String updatedNote = booking.getServiceNote().isEmpty()
                 ? note
                 : booking.getServiceNote() + ", " + note;
@@ -527,6 +539,7 @@ public class StaffController {
         return ResponseEntity.ok(ApiResponse.success("Đã hủy đơn đặt sân", booking));
     }
 
+    @Transactional(rollbackFor = Exception.class)
     @PostMapping("/pos/retail")
     public ResponseEntity<ApiResponse<PosSale>> createRetailPosSale(
             @RequestHeader(value = "Authorization", required = false) String authHeader,
@@ -550,6 +563,8 @@ public class StaffController {
                 ? String.valueOf(body.get("courtName"))
                 : currentShift.map(StaffShift::getCourtName).orElse("Sân bóng Thành Phát");
 
+        deductInventoryForPos(body.get("items"), staff.getFullName(), "Bán lẻ tại quầy POS");
+
         PosSale sale = new PosSale(
                 "pos_" + UUID.randomUUID().toString().replace("-", "").substring(0, 8),
                 courtId,
@@ -564,6 +579,93 @@ public class StaffController {
         );
         posSaleRepository.save(sale);
         return ResponseEntity.ok(ApiResponse.success("Đã ghi nhận đơn bán lẻ quầy POS", sale));
+    }
+
+    @GetMapping("/inventory")
+    public ResponseEntity<ApiResponse<List<Map<String, Object>>>> getStaffInventory(
+            @RequestHeader(value = "Authorization", required = false) String authHeader,
+            @RequestParam(required = false) String courtId
+    ) {
+        User staff = requireStaffOrOwner(authHeader);
+        if (inventoryItemRepository == null) {
+            return ResponseEntity.ok(ApiResponse.success("Danh sách kho trống", Collections.emptyList()));
+        }
+        String resolvedCourtId = (courtId != null && !courtId.isBlank())
+                ? courtId.trim()
+                : resolveCurrentOrTodayShift(staff.getId()).map(StaffShift::getCourtId).orElse("court_thanh_phat");
+
+        List<InventoryItem> items = inventoryItemRepository.findByCourtIdAndActiveTrueOrderByNameAsc(resolvedCourtId);
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (InventoryItem item : items) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("id", item.getId());
+            m.put("courtId", item.getCourtId());
+            m.put("courtName", item.getCourtName());
+            m.put("name", item.getName());
+            m.put("category", item.getCategory());
+            m.put("unit", item.getUnit());
+            m.put("importPrice", item.getImportPrice());
+            m.put("sellPrice", item.getSellPrice());
+            m.put("stockQuantity", item.getStockQuantity());
+            m.put("minAlertThreshold", item.getMinAlertThreshold());
+            m.put("lowStock", item.isLowStock());
+            result.add(m);
+        }
+        return ResponseEntity.ok(ApiResponse.success("Kho hàng tại chi nhánh", result));
+    }
+
+    @SuppressWarnings("unchecked")
+    private void deductInventoryForPos(Object rawItems, String staffName, String notePrefix) {
+        if (inventoryItemRepository == null || !(rawItems instanceof List<?> list) || list.isEmpty()) {
+            return;
+        }
+        List<Map.Entry<InventoryItem, Integer>> deductions = new ArrayList<>();
+        for (Object entry : list) {
+            if (!(entry instanceof Map<?, ?> map)) continue;
+            Object idObj = map.get("itemId");
+            Object qtyObj = map.get("quantity");
+            if (idObj == null || !(qtyObj instanceof Number qtyNum)) continue;
+            String itemId = String.valueOf(idObj).trim();
+            int qty = qtyNum.intValue();
+            if (itemId.isEmpty() || qty <= 0) continue;
+
+            InventoryItem item = inventoryItemRepository.findById(itemId).orElse(null);
+            if (item == null || !Boolean.TRUE.equals(item.getActive())) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Mặt hàng không tồn tại trong kho: " + itemId);
+            }
+            if (item.getStockQuantity() < qty) {
+                throw new ResponseStatusException(
+                        HttpStatus.BAD_REQUEST,
+                        "Không đủ tồn kho cho \"" + item.getName() + "\" (chỉ còn " + item.getStockQuantity() + " " + item.getUnit() + ")."
+                );
+            }
+            deductions.add(Map.entry(item, qty));
+        }
+
+        for (Map.Entry<InventoryItem, Integer> d : deductions) {
+            InventoryItem item = d.getKey();
+            int qty = d.getValue();
+            int newStock = item.getStockQuantity() - qty;
+            item.setStockQuantity(newStock);
+            item.setUpdatedAt(LocalDateTime.now(clock));
+            inventoryItemRepository.save(item);
+
+            if (inventoryTransactionRepository != null) {
+                InventoryTransaction tx = new InventoryTransaction(
+                        "tx_" + UUID.randomUUID().toString().substring(0, 8),
+                        item.getId(),
+                        item.getName(),
+                        item.getCourtId(),
+                        "SALE",
+                        -qty,
+                        newStock,
+                        item.getSellPrice(),
+                        notePrefix,
+                        staffName
+                );
+                inventoryTransactionRepository.save(tx);
+            }
+        }
     }
 
     @GetMapping("/pos/sales")

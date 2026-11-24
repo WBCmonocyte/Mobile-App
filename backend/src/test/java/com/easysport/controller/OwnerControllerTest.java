@@ -3,12 +3,16 @@ package com.easysport.controller;
 import com.easysport.dto.ApiResponse;
 import com.easysport.entity.Booking;
 import com.easysport.entity.Court;
+import com.easysport.entity.InventoryItem;
+import com.easysport.entity.InventoryTransaction;
 import com.easysport.entity.PosSale;
 import com.easysport.entity.ShiftReport;
 import com.easysport.entity.User;
 import com.easysport.entity.UserSession;
 import com.easysport.repository.BookingRepository;
 import com.easysport.repository.CourtRepository;
+import com.easysport.repository.InventoryItemRepository;
+import com.easysport.repository.InventoryTransactionRepository;
 import com.easysport.repository.PosSaleRepository;
 import com.easysport.repository.ShiftReportRepository;
 import com.easysport.repository.StaffShiftRepository;
@@ -45,6 +49,8 @@ class OwnerControllerTest {
     private StaffShiftRepository staffShiftRepository;
     private ShiftReportRepository shiftReportRepository;
     private PosSaleRepository posSaleRepository;
+    private InventoryItemRepository inventoryItemRepository;
+    private InventoryTransactionRepository inventoryTransactionRepository;
     private OwnerController controller;
 
     private User owner;
@@ -58,6 +64,8 @@ class OwnerControllerTest {
         staffShiftRepository = mock(StaffShiftRepository.class);
         shiftReportRepository = mock(ShiftReportRepository.class);
         posSaleRepository = mock(PosSaleRepository.class);
+        inventoryItemRepository = mock(InventoryItemRepository.class);
+        inventoryTransactionRepository = mock(InventoryTransactionRepository.class);
 
         AuthService authService = new AuthService(userRepository, userSessionRepository, clock);
         ShiftPlanningService shiftPlanningService = new ShiftPlanningService(staffShiftRepository, userRepository, clock, false);
@@ -71,6 +79,8 @@ class OwnerControllerTest {
                 posSaleRepository,
                 userRepository,
                 shiftPlanningService,
+                inventoryItemRepository,
+                inventoryTransactionRepository,
                 clock
         );
 
@@ -276,5 +286,30 @@ class OwnerControllerTest {
         assertEquals("0999888777", data.get("phone"));
         assertEquals("Sân Thành Phát", data.get("address"));
         assertNotEquals("oldhash", staff.getPassword());
+    }
+
+    @Test
+    void restockAndAdjustInventoryUpdatesStockAndLogsTransaction() {
+        InventoryItem item = new InventoryItem(
+                "inv_1", "c1", "Sân Thành Phát", "Revive", "DRINK", "chai", 8000, 15000, 10, 12
+        );
+        when(inventoryItemRepository.findById("inv_1")).thenReturn(Optional.of(item));
+
+        ResponseEntity<ApiResponse<Map<String, Object>>> restockRes = controller.restockInventoryItem(
+                "inv_1",
+                "Bearer tok_owner",
+                Map.of("quantity", 24, "unitCost", 8500, "note", "Nhập 1 thùng")
+        );
+        assertEquals(34, restockRes.getBody().getData().get("stockQuantity"));
+        assertEquals(8500, item.getImportPrice());
+        verify(inventoryTransactionRepository, times(1)).save(any(InventoryTransaction.class));
+
+        ResponseEntity<ApiResponse<Map<String, Object>>> adjustRes = controller.adjustInventoryItem(
+                "inv_1",
+                "Bearer tok_owner",
+                Map.of("newStock", 30, "note", "Kiểm kê cuối ngày (hỏng 4 chai)")
+        );
+        assertEquals(30, adjustRes.getBody().getData().get("stockQuantity"));
+        verify(inventoryTransactionRepository, times(2)).save(any(InventoryTransaction.class));
     }
 }

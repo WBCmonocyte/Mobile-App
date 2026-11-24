@@ -23,6 +23,7 @@ import androidx.compose.material.icons.automirrored.rounded.ArrowForward
 import androidx.compose.material.icons.outlined.Analytics
 import androidx.compose.material.icons.outlined.Group
 import androidx.compose.material.icons.outlined.Inbox
+import androidx.compose.material.icons.outlined.Inventory2
 import androidx.compose.material.icons.outlined.SportsSoccer
 import androidx.compose.material.icons.outlined.SportsTennis
 import androidx.compose.material.icons.outlined.Storefront
@@ -69,6 +70,8 @@ import androidx.compose.ui.unit.sp
 import com.example.easysport.data.model.BranchFieldItem
 import com.example.easysport.data.model.BranchRevenueItem
 import com.example.easysport.data.model.Court
+import com.example.easysport.data.model.InventoryItemModel
+import com.example.easysport.data.model.OwnerInventoryData
 import com.example.easysport.data.model.OwnerOverviewData
 import com.example.easysport.data.model.OwnerStaffAccount
 import com.example.easysport.data.model.OwnerWeekSchedule
@@ -108,6 +111,7 @@ private enum class OwnerTab(val label: String, val title: String, val icon: Imag
     OVERVIEW("Tổng quan", "Dashboard Chủ Sân", Icons.Outlined.Analytics),
     SHIFTS("Phân ca NV", "Phân ca nhân viên", Icons.Outlined.Group),
     REPORTS("Bàn giao két", "Duyệt bàn giao két", Icons.Outlined.Inbox),
+    INVENTORY("Kho hàng", "Quản lý Kho hàng", Icons.Outlined.Inventory2),
     MANAGE("Quản lý", "Quản lý Sân & NV", Icons.Outlined.Storefront),
 }
 
@@ -149,10 +153,19 @@ fun OwnerDashboardScreen(
     var showStaffFormDialog by remember { mutableStateOf(false) }
     var editingStaffAccount by remember { mutableStateOf<OwnerStaffAccount?>(null) }
 
+    var inventoryData by remember { mutableStateOf<OwnerInventoryData?>(null) }
+    var inventoryBranchId by remember { mutableStateOf<String?>(null) }
+    var restockTarget by remember { mutableStateOf<InventoryItemModel?>(null) }
+    var adjustTarget by remember { mutableStateOf<InventoryItemModel?>(null) }
+    var showInventoryForm by remember { mutableStateOf(false) }
+    var editingInventoryItem by remember { mutableStateOf<InventoryItemModel?>(null) }
+    var pendingDeleteInventoryItem by remember { mutableStateOf<InventoryItemModel?>(null) }
+
     fun refreshAll(
         targetWeek: String? = weekStart,
         targetPeriod: String = selectedPeriod,
         targetBranch: String? = selectedBranchId,
+        targetInvBranch: String? = inventoryBranchId,
     ) {
         scope.launch {
             isRefreshing = true
@@ -168,6 +181,7 @@ fun OwnerDashboardScreen(
             }
             StaffOwnerApiClient.getOwnerReports().onSuccess { reports = it }
             StaffOwnerApiClient.getOwnerStaffList().onSuccess { staffAccounts = it }
+            StaffOwnerApiClient.getOwnerInventory(targetInvBranch).onSuccess { inventoryData = it }
             isRefreshing = false
         }
     }
@@ -261,6 +275,26 @@ fun OwnerDashboardScreen(
                     reports = reports,
                     onConfirmClick = { pendingConfirmReport = it },
                     onRejectClick = { pendingRejectReport = it }
+                )
+                OwnerTab.INVENTORY -> OwnerInventoryTab(
+                    inventoryData = inventoryData,
+                    branches = overview?.branchRevenues ?: emptyList(),
+                    selectedBranchId = inventoryBranchId,
+                    onSelectBranch = { bId ->
+                        inventoryBranchId = bId
+                        refreshAll(targetInvBranch = bId)
+                    },
+                    onAddItem = {
+                        editingInventoryItem = null
+                        showInventoryForm = true
+                    },
+                    onEditItem = { item ->
+                        editingInventoryItem = item
+                        showInventoryForm = true
+                    },
+                    onRestockItem = { restockTarget = it },
+                    onAdjustItem = { adjustTarget = it },
+                    onDeleteItem = { pendingDeleteInventoryItem = it }
                 )
                 OwnerTab.MANAGE -> OwnerManageTab(
                     branches = overview?.branchRevenues ?: emptyList(),
@@ -638,6 +672,98 @@ fun OwnerDashboardScreen(
                         }
                         .onFailure { Toast.makeText(context, it.message, Toast.LENGTH_LONG).show() }
                 }
+            }
+        )
+    }
+
+    restockTarget?.let { target ->
+        RestockInventoryDialog(
+            item = target,
+            onDismiss = { restockTarget = null },
+            onConfirm = { qty, cost, note ->
+                restockTarget = null
+                scope.launch {
+                    StaffOwnerApiClient.restockInventoryItem(target.id, qty, cost, note)
+                        .onSuccess {
+                            Toast.makeText(context, "Đã nhập thêm $qty ${target.unit} ${target.name}", Toast.LENGTH_SHORT).show()
+                            refreshAll()
+                        }
+                        .onFailure { Toast.makeText(context, it.message, Toast.LENGTH_LONG).show() }
+                }
+            }
+        )
+    }
+
+    adjustTarget?.let { target ->
+        AdjustInventoryDialog(
+            item = target,
+            onDismiss = { adjustTarget = null },
+            onConfirm = { newStock, note ->
+                adjustTarget = null
+                scope.launch {
+                    StaffOwnerApiClient.adjustInventoryItem(target.id, newStock, note)
+                        .onSuccess {
+                            Toast.makeText(context, "Đã cập nhật kiểm kê ${target.name}: $newStock ${target.unit}", Toast.LENGTH_SHORT).show()
+                            refreshAll()
+                        }
+                        .onFailure { Toast.makeText(context, it.message, Toast.LENGTH_LONG).show() }
+                }
+            }
+        )
+    }
+
+    if (showInventoryForm) {
+        InventoryItemFormDialog(
+            existing = editingInventoryItem,
+            branches = overview?.branchRevenues ?: emptyList(),
+            defaultBranchId = inventoryBranchId,
+            onDismiss = {
+                showInventoryForm = false
+                editingInventoryItem = null
+            },
+            onSave = { courtId, name, category, unit, imp, sell, stk, minA ->
+                val editing = editingInventoryItem
+                showInventoryForm = false
+                editingInventoryItem = null
+                scope.launch {
+                    val res = if (editing == null) {
+                        StaffOwnerApiClient.createInventoryItem(courtId, name, category, unit, imp, sell, stk, minA)
+                    } else {
+                        StaffOwnerApiClient.updateInventoryItem(editing.id, name, category, unit, imp, sell, minA)
+                    }
+                    res.onSuccess {
+                        Toast.makeText(context, if (editing == null) "Đã thêm $name vào kho" else "Đã cập nhật $name", Toast.LENGTH_SHORT).show()
+                        refreshAll()
+                    }.onFailure {
+                        Toast.makeText(context, it.message, Toast.LENGTH_LONG).show()
+                    }
+                }
+            }
+        )
+    }
+
+    pendingDeleteInventoryItem?.let { item ->
+        AlertDialog(
+            onDismissRequest = { pendingDeleteInventoryItem = null },
+            containerColor = Color.White,
+            title = { Text("Xóa mặt hàng khỏi kho?", fontWeight = FontWeight.Bold, color = EsColors.Title) },
+            text = { Text("Xác nhận xóa \"${item.name}\" tại ${item.courtName}?", color = EsColors.Body) },
+            confirmButton = {
+                TextButton(onClick = {
+                    val target = item
+                    pendingDeleteInventoryItem = null
+                    scope.launch {
+                        StaffOwnerApiClient.deleteInventoryItem(target.id)
+                            .onSuccess {
+                                Toast.makeText(context, "Đã xóa ${target.name}", Toast.LENGTH_SHORT).show()
+                                refreshAll()
+                            }
+                            .onFailure { Toast.makeText(context, it.message, Toast.LENGTH_SHORT).show() }
+                    }
+                }) { Text("Xóa", color = ProColors.Rose, fontWeight = FontWeight.Bold) }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDeleteInventoryItem = null }) { Text("Hủy", color = EsColors.Body) }
             }
         )
     }
