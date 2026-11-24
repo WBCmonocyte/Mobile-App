@@ -120,16 +120,25 @@ fun MapScreen(
         position = CameraPosition.fromLatLngZoom(defaultCenter, 13.5f)
     }
 
-    // Di chuyển camera khi chọn sân cụ thể
-    LaunchedEffect(uiState.selectedCourtId) {
-        val selected = uiState.selectedCourtWithDistance
+    // Trạng thái bản đồ đã sẵn sàng
+    var isMapLoaded by remember { mutableStateOf(false) }
+
+    // Di chuyển camera khi người dùng chủ động chọn sân (tap marker) hoặc khi bản đồ vừa load xong
+    LaunchedEffect(uiState.userInitiatedCourtId, isMapLoaded) {
+        if (!isMapLoaded) return@LaunchedEffect
+        val courtId = uiState.userInitiatedCourtId ?: return@LaunchedEffect
+        val selected = uiState.filteredCourts.firstOrNull { it.court.id == courtId }
         if (selected != null && selected.hasCoordinates) {
-            cameraPositionState.animate(
-                CameraUpdateFactory.newLatLngZoom(
-                    LatLng(selected.court.latitude!!, selected.court.longitude!!),
-                    14.5f
+            try {
+                cameraPositionState.animate(
+                    CameraUpdateFactory.newLatLngZoom(
+                        LatLng(selected.court.latitude!!, selected.court.longitude!!),
+                        15f
+                    )
                 )
-            )
+            } catch (e: Exception) {
+                // Bảo vệ chống hủy coroutine animation khi map đang thao tác
+            }
         }
     }
 
@@ -170,6 +179,7 @@ fun MapScreen(
             GoogleMap(
                 modifier = Modifier.fillMaxSize(),
                 cameraPositionState = cameraPositionState,
+                contentPadding = PaddingValues(bottom = 220.dp),
                 properties = MapProperties(
                     isMyLocationEnabled = uiState.isLocationPermissionGranted && uiState.hasUserLocation
                 ),
@@ -178,8 +188,19 @@ fun MapScreen(
                     zoomControlsEnabled = false,
                     compassEnabled = true,
                     mapToolbarEnabled = false
-                )
+                ),
+                onMapLoaded = {
+                    isMapLoaded = true
+                }
             ) {
+                // Tạo và cache BitmapDescriptors bên trong GoogleMap khi đối tượng bản đồ đã sẵn sàng
+                val markerIcons = remember(context) {
+                    mapOf(
+                        false to createCourtMarkerBitmap(context, isSelected = false),
+                        true to createCourtMarkerBitmap(context, isSelected = true)
+                    )
+                }
+
                 // Marker cho các sân có tọa độ hợp lệ
                 uiState.filteredCourts.forEach { item ->
                     if (item.hasCoordinates) {
@@ -189,9 +210,12 @@ fun MapScreen(
                             state = rememberMarkerState(key = item.court.id, position = pos),
                             title = item.court.name,
                             snippet = "${item.court.sportType} · ${item.formattedDistance}",
+                            icon = markerIcons[isSelected],
+                            anchor = androidx.compose.ui.geometry.Offset(0.5f, 1.0f),
+                            zIndex = if (isSelected) 2f else 1f,
                             onClick = {
                                 viewModel.onCourtSelected(item.court.id)
-                                false
+                                true // Ngăn Google Maps tự xử lý thêm (mở info window, di chuyển camera riêng)
                             }
                         )
                     }
@@ -315,14 +339,18 @@ fun MapScreen(
                         Toast.makeText(context, "Dịch vụ định vị GPS đang tắt trên máy.", Toast.LENGTH_SHORT).show()
                     } else {
                         viewModel.refreshLocation(context)
-                        if (uiState.hasUserLocation) {
+                        if (uiState.hasUserLocation && isMapLoaded) {
                             coroutineScope.launch {
-                                cameraPositionState.animate(
-                                    CameraUpdateFactory.newLatLngZoom(
-                                        LatLng(uiState.userLat!!, uiState.userLng!!),
-                                        15f
+                                try {
+                                    cameraPositionState.animate(
+                                        CameraUpdateFactory.newLatLngZoom(
+                                            LatLng(uiState.userLat!!, uiState.userLng!!),
+                                            15f
+                                        )
                                     )
-                                )
+                                } catch (e: Exception) {
+                                    // Bảo vệ khi thao tác camera bị hủy hoặc bản đồ chưa sẵn sàng
+                                }
                             }
                         }
                     }
@@ -730,4 +758,111 @@ private fun MapScreenPreviewContent(
 @Composable
 private fun MapPreview() {
     MapScreen()
+}
+
+/**
+ * Tạo BitmapDescriptor hình giọt nước cho ghim sân:
+ * - Màu #3B82C4 (thường) và #1D4E89 (đang chọn)
+ * - Viền trắng dày 2.5dp
+ * - Biểu tượng thể thao màu trắng ở tâm
+ * - Neo tại chóp dưới (0.5f, 1.0f)
+ */
+private fun createCourtMarkerBitmap(
+    context: android.content.Context,
+    isSelected: Boolean
+): com.google.android.gms.maps.model.BitmapDescriptor {
+    return try {
+        val density = context.resources.displayMetrics.density
+        val widthDp = if (isSelected) 42f else 36f
+        val heightDp = if (isSelected) 56f else 48f
+        val w = (widthDp * density).toInt().coerceAtLeast(1)
+        val h = (heightDp * density).toInt().coerceAtLeast(1)
+
+        val bitmap = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.ARGB_8888)
+        val canvas = android.graphics.Canvas(bitmap)
+
+        val strokeWidth = 2.5f * density
+        val radius = (w - strokeWidth * 2) / 2f
+        val centerX = w / 2f
+        val centerY = radius + strokeWidth
+        val tipX = w / 2f
+        val tipY = h - strokeWidth
+
+        // Đường nét hình giọt nước: vòng tròn phía trên kết nối tới chóp nhọn phía dưới
+        val path = android.graphics.Path().apply {
+            moveTo(tipX, tipY)
+            arcTo(
+                android.graphics.RectF(
+                    centerX - radius,
+                    centerY - radius,
+                    centerX + radius,
+                    centerY + radius
+                ),
+                140f,
+                260f,
+                false
+            )
+            lineTo(tipX, tipY)
+            close()
+        }
+
+        // Đổ bóng nhẹ phía dưới chóp
+        val shadowPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            color = android.graphics.Color.argb(45, 0, 0, 0)
+            style = android.graphics.Paint.Style.FILL
+        }
+        canvas.drawCircle(tipX, tipY - 1f, 3f * density, shadowPaint)
+
+        // Tô màu thân ghim: #1D4E89 khi chọn, #3B82C4 khi thường
+        val fillColor = if (isSelected) 0xFF1D4E89.toInt() else 0xFF3B82C4.toInt()
+        val fillPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            color = fillColor
+            style = android.graphics.Paint.Style.FILL
+        }
+        canvas.drawPath(path, fillPaint)
+
+        // Viền trắng bao quanh ghim
+        val strokePaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            color = android.graphics.Color.WHITE
+            style = android.graphics.Paint.Style.STROKE
+            this.strokeWidth = strokeWidth
+            strokeCap = android.graphics.Paint.Cap.ROUND
+            strokeJoin = android.graphics.Paint.Join.ROUND
+        }
+        canvas.drawPath(path, strokePaint)
+
+        // Biểu tượng thể thao trắng (hình quả bóng thể thao với đường rãnh trắng)
+        val iconRadius = radius * 0.44f
+        val iconStrokePaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            color = android.graphics.Color.WHITE
+            style = android.graphics.Paint.Style.STROKE
+            this.strokeWidth = 1.8f * density
+        }
+        canvas.drawCircle(centerX, centerY, iconRadius, iconStrokePaint)
+
+        val seamPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+            color = android.graphics.Color.WHITE
+            style = android.graphics.Paint.Style.STROKE
+            this.strokeWidth = 1.2f * density
+        }
+        // Đường chỉ dọc
+        canvas.drawLine(centerX, centerY - iconRadius, centerX, centerY + iconRadius, seamPaint)
+        // Đường cong bán nguyệt ngang tạo họa tiết quả bóng
+        val seamRect = android.graphics.RectF(
+            centerX - iconRadius,
+            centerY - iconRadius * 0.55f,
+            centerX + iconRadius,
+            centerY + iconRadius * 0.55f
+        )
+        canvas.drawArc(seamRect, 0f, 180f, false, seamPaint)
+
+        com.google.android.gms.maps.model.BitmapDescriptorFactory.fromBitmap(bitmap)
+    } catch (e: Exception) {
+        val hue = if (isSelected) {
+            com.google.android.gms.maps.model.BitmapDescriptorFactory.HUE_AZURE
+        } else {
+            com.google.android.gms.maps.model.BitmapDescriptorFactory.HUE_BLUE
+        }
+        com.google.android.gms.maps.model.BitmapDescriptorFactory.defaultMarker(hue)
+    }
 }

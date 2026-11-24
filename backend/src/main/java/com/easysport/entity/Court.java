@@ -19,6 +19,12 @@ public class Court {
     @Column(nullable = false, length = 255)
     private String address;
 
+    @Column(length = 100)
+    private String city;
+
+    @Column(length = 100)
+    private String district;
+
     private Double rating = 5.0;
 
     @Column(name = "review_count")
@@ -88,6 +94,12 @@ public class Court {
 
     public String getAddress() { return address; }
     public void setAddress(String address) { this.address = address; }
+
+    public String getCity() { return city; }
+    public void setCity(String city) { this.city = city; }
+
+    public String getDistrict() { return district; }
+    public void setDistrict(String district) { this.district = district; }
 
     public Double getRating() { return rating; }
     public void setRating(Double rating) { this.rating = rating; }

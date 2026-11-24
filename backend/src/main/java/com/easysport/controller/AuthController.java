@@ -7,7 +7,10 @@ import com.easysport.dto.RegisterRequest;
 import com.easysport.dto.UpdateProfileRequest;
 import com.easysport.entity.User;
 import com.easysport.service.AuthService;
+import com.easysport.service.RegistrationVerificationService;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Pattern;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -17,8 +20,10 @@ import org.springframework.web.bind.annotation.*;
 public class AuthController {
 
     private final AuthService authService;
+    private final RegistrationVerificationService registration;
 
-    public AuthController(AuthService authService) {
+    public AuthController(AuthService authService, RegistrationVerificationService registration) {
+        this.registration = registration;
         this.authService = authService;
     }
 
@@ -33,13 +38,20 @@ public class AuthController {
     }
 
     @PostMapping("/register")
-    public ResponseEntity<ApiResponse<AuthResponse>> register(@Valid @RequestBody RegisterRequest request) {
-        try {
-            AuthResponse response = authService.register(request);
-            return ResponseEntity.ok(ApiResponse.success("Đăng ký thành công", response));
-        } catch (IllegalArgumentException e) {
-            return ResponseEntity.badRequest().body(ApiResponse.error(e.getMessage()));
-        }
+    public ResponseEntity<ApiResponse<RegistrationVerificationService.Challenge>> register(
+            @Valid @RequestBody RegisterRequest request) {
+        return ResponseEntity.accepted().body(ApiResponse.success("Đã gửi mã xác nhận", registration.start(request)));
+    }
+
+    public record VerifyRegistrationRequest(
+            @NotBlank @Pattern(regexp = "[0-9a-f-]{36}") String challengeId,
+            @NotBlank @Pattern(regexp = "[0-9]{6}", message = "Mã phải có 6 chữ số.") String code) {}
+
+    @PostMapping("/register/verify")
+    public ResponseEntity<ApiResponse<AuthResponse>> verifyRegistration(
+            @Valid @RequestBody VerifyRegistrationRequest request) {
+        return ResponseEntity.ok(ApiResponse.success("Đăng ký thành công",
+                registration.verify(request.challengeId(), request.code())));
     }
 
     @GetMapping("/me")

@@ -30,6 +30,7 @@ import com.example.easysport.ui.home.HomeTab
 import com.example.easysport.ui.home.NotificationScreen
 import com.example.easysport.ui.login.LoginRoute
 import com.example.easysport.ui.map.MapScreen
+import com.example.easysport.ui.news.NewsScreen
 import com.example.easysport.ui.owner.OwnerDashboardScreen
 import com.example.easysport.ui.signup.SignUpRoute
 import com.example.easysport.ui.staff.StaffDashboardScreen
@@ -44,6 +45,7 @@ object Routes {
     const val MAP = "map"
     const val MAP_WITH_SPORT = "map?sport={sport}"
     const val ACCOUNT = "account"
+    const val NEWS = "news"
     const val SEARCH = "search"
     const val PAYMENT = "payment"
     const val NOTIFICATIONS = "notifications"
@@ -125,7 +127,13 @@ fun AppNavHost(
                     restoreState = true
                 }
             }
-            HomeTab.NEWS -> Unit
+            HomeTab.NEWS -> {
+                nav.navigate(Routes.NEWS) {
+                    popUpTo(Routes.HOME) { saveState = true }
+                    launchSingleTop = true
+                    restoreState = true
+                }
+            }
         }
     }
 
@@ -275,6 +283,15 @@ fun AppNavHost(
                 },
                 onOpenBooking = { bookingId ->
                     nav.navigate(Routes.booking(bookingId))
+                }
+            )
+        }
+
+        composable(Routes.NEWS) {
+            NewsScreen(
+                onTabSelected = ::navigateToTab,
+                onCourtClick = { courtId ->
+                    nav.navigate(Routes.court(courtId))
                 }
             )
         }
