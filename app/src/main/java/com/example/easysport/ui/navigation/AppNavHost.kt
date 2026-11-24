@@ -30,7 +30,9 @@ import com.example.easysport.ui.home.HomeTab
 import com.example.easysport.ui.home.NotificationScreen
 import com.example.easysport.ui.login.LoginRoute
 import com.example.easysport.ui.map.MapScreen
+import com.example.easysport.ui.owner.OwnerDashboardScreen
 import com.example.easysport.ui.signup.SignUpRoute
+import com.example.easysport.ui.staff.StaffDashboardScreen
 import kotlinx.coroutines.launch
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
@@ -47,6 +49,8 @@ object Routes {
     const val NOTIFICATIONS = "notifications"
     const val COURT = "court/{courtId}"
     const val BOOKING = "booking/{bookingId}"
+    const val STAFF_DASHBOARD = "staff_dashboard"
+    const val OWNER_DASHBOARD = "owner_dashboard"
 
     fun court(id: String) = "court/$id"
     fun booking(id: String) = "booking/$id"
@@ -68,7 +72,13 @@ fun AppNavHost(
     }
 
     val resolvedStartDestination = remember {
-        startDestination ?: if (UserStore.isLoggedIn()) Routes.HOME else Routes.LOGIN
+        startDestination ?: if (UserStore.isLoggedIn()) {
+            when (UserStore.getUser()?.role?.uppercase()) {
+                "STAFF" -> Routes.STAFF_DASHBOARD
+                "OWNER" -> Routes.OWNER_DASHBOARD
+                else -> Routes.HOME
+            }
+        } else Routes.LOGIN
     }
 
     var paymentRequest by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf<BookingRequest?>(null) }
@@ -149,9 +159,38 @@ fun AppNavHost(
                 onLoggedIn = {
                     CourtStore.refresh(context)
                     BookingStore.refresh()
-                    nav.navigate(Routes.HOME) { popUpTo(Routes.LOGIN) { inclusive = true } }
+                    val dest = when (UserStore.getUser()?.role?.uppercase()) {
+                        "STAFF" -> Routes.STAFF_DASHBOARD
+                        "OWNER" -> Routes.OWNER_DASHBOARD
+                        else -> Routes.HOME
+                    }
+                    nav.navigate(dest) { popUpTo(Routes.LOGIN) { inclusive = true } }
                 },
                 onSignUp = { nav.navigate(Routes.SIGNUP) },
+            )
+        }
+
+        composable(Routes.STAFF_DASHBOARD) {
+            StaffDashboardScreen(
+                onLogout = {
+                    UserStore.logout()
+                    BookingStore.clear()
+                    nav.navigate(Routes.LOGIN) {
+                        popUpTo(0) { inclusive = true }
+                    }
+                }
+            )
+        }
+
+        composable(Routes.OWNER_DASHBOARD) {
+            OwnerDashboardScreen(
+                onLogout = {
+                    UserStore.logout()
+                    BookingStore.clear()
+                    nav.navigate(Routes.LOGIN) {
+                        popUpTo(0) { inclusive = true }
+                    }
+                }
             )
         }
 
