@@ -2,14 +2,19 @@ package com.example.easysport.data.remote
 
 import com.example.easysport.data.model.BranchFieldItem
 import com.example.easysport.data.model.BranchRevenueItem
+import com.example.easysport.data.model.BranchStockStatModel
+import com.example.easysport.data.model.CategoryStockStatModel
+import com.example.easysport.data.model.FieldRevenueStat
 import com.example.easysport.data.model.InventoryItemModel
 import com.example.easysport.data.model.InventoryTransactionModel
 import com.example.easysport.data.model.OwnerInventoryData
+import com.example.easysport.data.model.OwnerInventoryStatsData
 import com.example.easysport.data.model.OwnerOverviewData
 import com.example.easysport.data.model.OwnerStaffAccount
 import com.example.easysport.data.model.OwnerWeekSchedule
 import com.example.easysport.data.model.PosOrderItemRequest
 import com.example.easysport.data.model.PosSaleItem
+import com.example.easysport.data.model.ReorderSuggestionModel
 import com.example.easysport.data.model.ScheduleDay
 import com.example.easysport.data.model.ScheduleSlot
 import com.example.easysport.data.model.ShiftReportItem
@@ -19,6 +24,8 @@ import com.example.easysport.data.model.StaffMemberOption
 import com.example.easysport.data.model.StaffShiftItem
 import com.example.easysport.data.model.StaffShiftSummary
 import com.example.easysport.data.model.StaffWorkload
+import com.example.easysport.data.model.TimeSlotRevenueStat
+import com.example.easysport.data.model.TopSellingItemModel
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -294,6 +301,8 @@ object StaffOwnerApiClient {
                         bookingCount = b.optInt("bookingCount", 0),
                         activeCount = b.optInt("activeCount", 0),
                         revenue = b.optLong("revenue", 0L),
+                        courtRevenue = b.optLong("courtRevenue", 0L),
+                        posRevenue = b.optLong("posRevenue", 0L),
                         latitude = if (b.isNull("latitude")) null else b.optDouble("latitude"),
                         longitude = if (b.isNull("longitude")) null else b.optDouble("longitude"),
                         indoor = b.optBoolean("indoor", false),
@@ -301,16 +310,51 @@ object StaffOwnerApiClient {
                     )
                 )
             }
+            val fieldArr = data.optJSONArray("fieldRevenues") ?: JSONArray()
+            val fieldRevenues = buildList {
+                for (i in 0 until fieldArr.length()) {
+                    val f = fieldArr.getJSONObject(i)
+                    add(
+                        FieldRevenueStat(
+                            courtId = f.optString("courtId"),
+                            courtName = f.optString("courtName", "Cụm sân"),
+                            fieldName = f.optString("fieldName", "Sân"),
+                            bookingCount = f.optInt("bookingCount", 0),
+                            courtRevenue = f.optLong("courtRevenue", 0L),
+                            serviceRevenue = f.optLong("serviceRevenue", 0L),
+                            totalRevenue = f.optLong("totalRevenue", 0L),
+                        )
+                    )
+                }
+            }
+            val slotArr = data.optJSONArray("timeSlotRevenues") ?: JSONArray()
+            val timeSlotRevenues = buildList {
+                for (i in 0 until slotArr.length()) {
+                    val s = slotArr.getJSONObject(i)
+                    add(
+                        TimeSlotRevenueStat(
+                            slot = s.optString("slot"),
+                            label = s.optString("label"),
+                            bookingCount = s.optInt("bookingCount", 0),
+                            revenue = s.optLong("revenue", 0L),
+                        )
+                    )
+                }
+            }
             OwnerOverviewData(
                 totalRevenue = data.optLong("totalRevenue", 0L),
                 cashRevenue = data.optLong("cashRevenue", 0L),
                 qrRevenue = data.optLong("qrRevenue", 0L),
+                courtRevenue = data.optLong("courtRevenue", 0L),
+                posRevenue = data.optLong("posRevenue", 0L),
                 totalBookings = data.optInt("totalBookings", 0),
                 activeBookings = data.optInt("activeBookings", 0),
                 totalCourts = data.optInt("totalCourts", 0),
                 pendingReports = data.optInt("pendingReports", 0),
                 bookings = parseBookings(data.optJSONArray("bookings") ?: JSONArray()),
                 branchRevenues = branches,
+                fieldRevenues = fieldRevenues,
+                timeSlotRevenues = timeSlotRevenues,
             )
         }
     }
@@ -835,6 +879,9 @@ object StaffOwnerApiClient {
         sellPrice: Int,
         stockQuantity: Int,
         minAlertThreshold: Int,
+        sku: String = "",
+        barcode: String = "",
+        supplierName: String = "",
     ): Result<InventoryItemModel> = withContext(Dispatchers.IO) {
         runCatching {
             val payload = JSONObject().apply {
@@ -846,6 +893,9 @@ object StaffOwnerApiClient {
                 put("sellPrice", sellPrice)
                 put("stockQuantity", stockQuantity)
                 put("minAlertThreshold", minAlertThreshold)
+                if (sku.isNotBlank()) put("sku", sku)
+                if (barcode.isNotBlank()) put("barcode", barcode)
+                if (supplierName.isNotBlank()) put("supplierName", supplierName)
             }
             val (code, body) = send("POST", "${baseUrl()}/api/owner/inventory", payload.toString())
             parseInventoryItem(extractDataObject(code, body, "Không thể thêm mặt hàng"))
@@ -860,6 +910,9 @@ object StaffOwnerApiClient {
         importPrice: Int,
         sellPrice: Int,
         minAlertThreshold: Int,
+        sku: String = "",
+        barcode: String = "",
+        supplierName: String = "",
     ): Result<InventoryItemModel> = withContext(Dispatchers.IO) {
         runCatching {
             val payload = JSONObject().apply {
@@ -869,6 +922,9 @@ object StaffOwnerApiClient {
                 put("importPrice", importPrice)
                 put("sellPrice", sellPrice)
                 put("minAlertThreshold", minAlertThreshold)
+                put("sku", sku)
+                put("barcode", barcode)
+                put("supplierName", supplierName)
             }
             val (code, body) = send("PUT", "${baseUrl()}/api/owner/inventory/$id", payload.toString())
             parseInventoryItem(extractDataObject(code, body, "Không thể cập nhật mặt hàng"))
@@ -880,12 +936,14 @@ object StaffOwnerApiClient {
         quantity: Int,
         unitCost: Int,
         note: String,
+        supplierName: String = "",
     ): Result<InventoryItemModel> = withContext(Dispatchers.IO) {
         runCatching {
             val payload = JSONObject().apply {
                 put("quantity", quantity)
                 put("unitCost", unitCost)
                 put("note", note)
+                if (supplierName.isNotBlank()) put("supplierName", supplierName)
             }
             val (code, body) = send("POST", "${baseUrl()}/api/owner/inventory/$id/restock", payload.toString())
             parseInventoryItem(extractDataObject(code, body, "Nhập kho thất bại"))
@@ -904,6 +962,157 @@ object StaffOwnerApiClient {
             }
             val (code, body) = send("POST", "${baseUrl()}/api/owner/inventory/$id/adjust", payload.toString())
             parseInventoryItem(extractDataObject(code, body, "Kiểm kê kho thất bại"))
+        }
+    }
+
+    suspend fun wastageInventoryItem(
+        id: String,
+        quantity: Int,
+        reasonType: String,
+        note: String,
+    ): Result<InventoryItemModel> = withContext(Dispatchers.IO) {
+        runCatching {
+            val payload = JSONObject().apply {
+                put("quantity", quantity)
+                put("reasonType", reasonType)
+                put("note", note)
+            }
+            val (code, body) = send("POST", "${baseUrl()}/api/owner/inventory/$id/wastage", payload.toString())
+            parseInventoryItem(extractDataObject(code, body, "Xuất hủy thất bại"))
+        }
+    }
+
+    suspend fun transferInventoryItem(
+        id: String,
+        targetCourtId: String,
+        quantity: Int,
+        note: String,
+    ): Result<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            val payload = JSONObject().apply {
+                put("targetCourtId", targetCourtId)
+                put("quantity", quantity)
+                put("note", note)
+            }
+            val (code, body) = send("POST", "${baseUrl()}/api/owner/inventory/$id/transfer", payload.toString())
+            if (code !in 200..299) throw IllegalStateException(parseError(body, "Chuyển kho thất bại"))
+            JSONObject(body).optString("message", "Đã điều chuyển kho thành công")
+        }
+    }
+
+    suspend fun getOwnerInventoryStats(
+        courtId: String? = null,
+        period: String = "ALL",
+    ): Result<OwnerInventoryStatsData> = withContext(Dispatchers.IO) {
+        runCatching {
+            val params = mutableListOf<String>()
+            if (!courtId.isNullOrBlank() && courtId != "ALL") {
+                params.add("courtId=${URLEncoder.encode(courtId, "UTF-8")}")
+            }
+            if (period.isNotBlank()) {
+                params.add("period=${URLEncoder.encode(period, "UTF-8")}")
+            }
+            val query = if (params.isNotEmpty()) "?${params.joinToString("&")}" else ""
+            val (code, body) = send("GET", "${baseUrl()}/api/owner/inventory/stats$query", null)
+            val data = extractDataObject(code, body, "Không thể tải thống kê kho hàng")
+
+            val topArr = data.optJSONArray("topSelling") ?: JSONArray()
+            val topSelling = buildList {
+                for (i in 0 until topArr.length()) {
+                    val o = topArr.getJSONObject(i)
+                    add(
+                        TopSellingItemModel(
+                            itemId = o.optString("itemId"),
+                            itemName = o.optString("itemName"),
+                            courtName = o.optString("courtName", ""),
+                            unit = o.optString("unit", "sp"),
+                            soldUnits = o.optLong("soldUnits", 0L),
+                            revenue = o.optLong("revenue", 0L),
+                            profit = o.optLong("profit", 0L),
+                            currentStock = o.optInt("currentStock", 0),
+                        )
+                    )
+                }
+            }
+
+            val catArr = data.optJSONArray("categoryBreakdown") ?: JSONArray()
+            val categoryBreakdown = buildList {
+                for (i in 0 until catArr.length()) {
+                    val o = catArr.getJSONObject(i)
+                    add(
+                        CategoryStockStatModel(
+                            category = o.optString("category"),
+                            label = o.optString("label"),
+                            itemCount = o.optInt("itemCount", 0),
+                            stockUnits = o.optInt("stockUnits", 0),
+                            stockValue = o.optLong("stockValue", 0L),
+                            soldUnits = o.optLong("soldUnits", 0L),
+                            revenue = o.optLong("revenue", 0L),
+                        )
+                    )
+                }
+            }
+
+            val brArr = data.optJSONArray("branchBreakdown") ?: JSONArray()
+            val branchBreakdown = buildList {
+                for (i in 0 until brArr.length()) {
+                    val o = brArr.getJSONObject(i)
+                    add(
+                        BranchStockStatModel(
+                            courtId = o.optString("courtId"),
+                            courtName = o.optString("courtName"),
+                            itemCount = o.optInt("itemCount", 0),
+                            stockUnits = o.optInt("stockUnits", 0),
+                            stockValue = o.optLong("stockValue", 0L),
+                            lowStockCount = o.optInt("lowStockCount", 0),
+                            revenue = o.optLong("revenue", 0L),
+                            profit = o.optLong("profit", 0L),
+                        )
+                    )
+                }
+            }
+
+            val sugArr = data.optJSONArray("reorderSuggestions") ?: JSONArray()
+            val reorderSuggestions = buildList {
+                for (i in 0 until sugArr.length()) {
+                    val o = sugArr.getJSONObject(i)
+                    add(
+                        ReorderSuggestionModel(
+                            itemId = o.optString("itemId"),
+                            name = o.optString("name"),
+                            courtId = o.optString("courtId"),
+                            courtName = o.optString("courtName"),
+                            unit = o.optString("unit", "sp"),
+                            currentStock = o.optInt("currentStock", 0),
+                            minAlertThreshold = o.optInt("minAlertThreshold", 10),
+                            suggestedQty = o.optInt("suggestedQty", 12),
+                            estimatedCost = o.optLong("estimatedCost", 0L),
+                        )
+                    )
+                }
+            }
+
+            OwnerInventoryStatsData(
+                period = data.optString("period", period),
+                totalRevenue = data.optLong("totalRevenue", 0L),
+                totalCogs = data.optLong("totalCogs", 0L),
+                grossProfit = data.optLong("grossProfit", 0L),
+                profitMarginPercent = data.optDouble("profitMarginPercent", 0.0),
+                totalSoldUnits = data.optInt("totalSoldUnits", 0),
+                totalImportSpend = data.optLong("totalImportSpend", 0L),
+                totalImportedUnits = data.optInt("totalImportedUnits", 0),
+                totalWastageCost = data.optLong("totalWastageCost", 0L),
+                totalWastageUnits = data.optInt("totalWastageUnits", 0),
+                totalTransferCount = data.optInt("totalTransferCount", 0),
+                totalStockValue = data.optLong("totalStockValue", 0L),
+                totalPotentialRevenue = data.optLong("totalPotentialRevenue", 0L),
+                lowStockCount = data.optInt("lowStockCount", 0),
+                outOfStockCount = data.optInt("outOfStockCount", 0),
+                topSelling = topSelling,
+                categoryBreakdown = categoryBreakdown,
+                branchBreakdown = branchBreakdown,
+                reorderSuggestions = reorderSuggestions,
+            )
         }
     }
 
@@ -928,6 +1137,9 @@ object StaffOwnerApiClient {
             stockQuantity = o.optInt("stockQuantity", 0),
             minAlertThreshold = o.optInt("minAlertThreshold", 10),
             lowStock = o.optBoolean("lowStock", false),
+            sku = o.optString("sku", ""),
+            barcode = o.optString("barcode", ""),
+            supplierName = o.optString("supplierName", ""),
             updatedAt = o.optString("updatedAt", ""),
         )
     }

@@ -198,6 +198,13 @@ class OwnerControllerTest {
         assertEquals(90000L, ((Number) data.get("qrRevenue")).longValue());
         assertEquals(210000L, ((Number) data.get("cashRevenue")).longValue());
         assertEquals(1, ((Number) data.get("totalBookings")).intValue());
+        assertEquals(300000L, ((Number) data.get("courtRevenue")).longValue());
+        assertEquals(0L, ((Number) data.get("posRevenue")).longValue());
+
+        List<?> fields = (List<?>) data.get("fieldRevenues");
+        assertEquals(1, fields.size());
+        List<?> slots = (List<?>) data.get("timeSlotRevenues");
+        assertEquals(3, slots.size());
     }
 
     @Test
@@ -311,5 +318,101 @@ class OwnerControllerTest {
         );
         assertEquals(30, adjustRes.getBody().getData().get("stockQuantity"));
         verify(inventoryTransactionRepository, times(2)).save(any(InventoryTransaction.class));
+    }
+
+    @Test
+    void wastageInventoryItemDeductsStockAndLogsTransaction() {
+        InventoryItem item = new InventoryItem(
+                "inv_w", "c1", "Sân Thành Phát", "Nước suối", "DRINK", "chai", 4000, 10000, 15, 5
+        );
+        when(inventoryItemRepository.findById("inv_w")).thenReturn(Optional.of(item));
+
+        ResponseEntity<ApiResponse<Map<String, Object>>> okRes = controller.wastageInventoryItem(
+                "inv_w",
+                "Bearer tok_owner",
+                Map.of("quantity", 3, "reasonType", "DAMAGE", "note", "Rơi vỡ 3 chai")
+        );
+        assertEquals(200, okRes.getStatusCode().value());
+        assertEquals(12, okRes.getBody().getData().get("stockQuantity"));
+        verify(inventoryTransactionRepository, times(1)).save(any(InventoryTransaction.class));
+
+        ResponseEntity<ApiResponse<Map<String, Object>>> badRes = controller.wastageInventoryItem(
+                "inv_w",
+                "Bearer tok_owner",
+                Map.of("quantity", 20, "reasonType", "EXPIRED")
+        );
+        assertEquals(400, badRes.getStatusCode().value());
+    }
+
+    @Test
+    void transferInventoryItemMovesStockAcrossBranches() {
+        InventoryItem src = new InventoryItem(
+                "inv_src", "c1", "Sân Thành Phát", "Revive", "DRINK", "chai", 8500, 15000, 40, 10
+        );
+        src.setSku("REV-330");
+        Court destCourt = new Court("c2", "Sân Hoàng Gia", "HCM", 4.9, 10, 1.0, 300000, 150000, 250000, 300000, "img");
+
+        when(inventoryItemRepository.findById("inv_src")).thenReturn(Optional.of(src));
+        when(courtRepository.findById("c2")).thenReturn(Optional.of(destCourt));
+        when(inventoryItemRepository.findByCourtIdAndActiveTrue("c2")).thenReturn(List.of());
+        when(inventoryItemRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        ResponseEntity<ApiResponse<Map<String, Object>>> sameBranchRes = controller.transferInventoryItem(
+                "inv_src",
+                "Bearer tok_owner",
+                Map.of("targetCourtId", "c1", "quantity", 5)
+        );
+        assertEquals(400, sameBranchRes.getStatusCode().value());
+
+        ResponseEntity<ApiResponse<Map<String, Object>>> okRes = controller.transferInventoryItem(
+                "inv_src",
+                "Bearer tok_owner",
+                Map.of("targetCourtId", "c2", "quantity", 12, "note", "Chuyển hỗ trợ giải")
+        );
+        assertEquals(200, okRes.getStatusCode().value());
+        assertEquals(28, src.getStockQuantity());
+        verify(inventoryItemRepository, times(2)).save(any(InventoryItem.class));
+        verify(inventoryTransactionRepository, times(2)).save(any(InventoryTransaction.class));
+    }
+
+    @Test
+    void getInventoryStatsComputesRevenueProfitWastageAndSuggestions() {
+        InventoryItem item1 = new InventoryItem(
+                "inv_1", "c1", "Sân Thành Phát", "Revive", "DRINK", "chai", 8500, 15000, 40, 10
+        );
+        InventoryItem item2 = new InventoryItem(
+                "inv_2", "c1", "Sân Thành Phát", "Redbull", "DRINK", "lon", 11000, 20000, 5, 10
+        );
+        InventoryTransaction saleTx = new InventoryTransaction(
+                "tx_s1", "inv_1", "Revive", "c1", "SALE", -10, 40, 15000, "Bán POS", "NV"
+        );
+        saleTx.setCreatedAt(LocalDateTime.now(clock));
+        InventoryTransaction dmgTx = new InventoryTransaction(
+                "tx_d1", "inv_2", "Redbull", "c1", "DAMAGE", -2, 5, 11000, "Móp lon", "Owner"
+        );
+        dmgTx.setCreatedAt(LocalDateTime.now(clock));
+        InventoryTransaction impTx = new InventoryTransaction(
+                "tx_i1", "inv_1", "Revive", "c1", "IMPORT", 20, 50, 8500, "Nhập kho", "Owner"
+        );
+        impTx.setCreatedAt(LocalDateTime.now(clock));
+
+        when(inventoryItemRepository.findAll()).thenReturn(List.of(item1, item2));
+        when(inventoryItemRepository.findByActiveTrueOrderByCourtIdAscNameAsc()).thenReturn(List.of(item1, item2));
+        when(inventoryTransactionRepository.findByOrderByCreatedAtDesc()).thenReturn(List.of(saleTx, dmgTx, impTx));
+
+        ResponseEntity<ApiResponse<Map<String, Object>>> res = controller.getInventoryStats("Bearer tok_owner", null, "ALL");
+        assertEquals(200, res.getStatusCode().value());
+        Map<String, Object> stats = res.getBody().getData();
+        assertEquals(150000L, ((Number) stats.get("totalRevenue")).longValue());
+        assertEquals(85000L, ((Number) stats.get("totalCogs")).longValue());
+        assertEquals(65000L, ((Number) stats.get("grossProfit")).longValue());
+        assertEquals(170000L, ((Number) stats.get("totalImportSpend")).longValue());
+        assertEquals(22000L, ((Number) stats.get("totalWastageCost")).longValue());
+        assertEquals(1, ((Number) stats.get("lowStockCount")).intValue());
+
+        List<?> suggestions = (List<?>) stats.get("reorderSuggestions");
+        assertEquals(1, suggestions.size());
+        List<?> topSelling = (List<?>) stats.get("topSelling");
+        assertEquals(1, topSelling.size());
     }
 }

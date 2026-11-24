@@ -9,4 +9,6 @@ public interface InventoryTransactionRepository extends JpaRepository<InventoryT
     List<InventoryTransaction> findTop50ByOrderByCreatedAtDesc();
     List<InventoryTransaction> findTop50ByCourtIdOrderByCreatedAtDesc(String courtId);
     List<InventoryTransaction> findByItemIdOrderByCreatedAtDesc(String itemId);
+    List<InventoryTransaction> findByOrderByCreatedAtDesc();
+    List<InventoryTransaction> findByCourtIdOrderByCreatedAtDesc(String courtId);
 }

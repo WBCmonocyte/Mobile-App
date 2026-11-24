@@ -1467,7 +1467,18 @@ private fun StaffPosTab(
         )
     }
     var paymentMethod by remember { mutableStateOf("Tiền mặt") }
+    var posSearchQuery by remember { mutableStateOf("") }
     var cartCounts by remember(inventoryItems) { mutableStateOf<Map<String, Int>>(emptyMap()) }
+
+    val filteredPosItems = remember(inventoryItems, posSearchQuery) {
+        val q = posSearchQuery.trim().lowercase()
+        if (q.isEmpty()) inventoryItems
+        else inventoryItems.filter {
+            it.name.lowercase().contains(q) ||
+                it.sku.lowercase().contains(q) ||
+                it.barcode.lowercase().contains(q)
+        }
+    }
 
     val total = remember(inventoryItems, cartCounts) {
         inventoryItems.sumOf { item -> (cartCounts[item.id] ?: 0) * item.sellPrice }
@@ -1524,6 +1535,33 @@ private fun StaffPosTab(
                 ProSectionHeader("2. Kho hàng & Dịch vụ tại sân ($itemCount món đã chọn)")
             }
 
+            if (inventoryItems.isNotEmpty()) {
+                item {
+                    OutlinedTextField(
+                        value = posSearchQuery,
+                        onValueChange = { posSearchQuery = it },
+                        placeholder = { Text("Tìm tên món, mã SKU hoặc mã vạch...") },
+                        leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null, tint = ProColors.Muted) },
+                        trailingIcon = {
+                            if (posSearchQuery.isNotEmpty()) {
+                                IconButton(onClick = { posSearchQuery = "" }) {
+                                    Icon(Icons.Rounded.Close, contentDescription = "Xóa")
+                                }
+                            }
+                        },
+                        singleLine = true,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = ProColors.Primary,
+                            unfocusedBorderColor = ProColors.Border,
+                            focusedContainerColor = Color.White,
+                            unfocusedContainerColor = Color.White
+                        )
+                    )
+                }
+            }
+
             if (inventoryItems.isEmpty()) {
                 item {
                     EmptyStateCard(
@@ -1531,8 +1569,15 @@ private fun StaffPosTab(
                         subtitle = "Chủ sân có thể thêm nước uống và dụng cụ tại mục Kho hàng."
                     )
                 }
+            } else if (filteredPosItems.isEmpty()) {
+                item {
+                    EmptyStateCard(
+                        title = "Không tìm thấy sản phẩm",
+                        subtitle = "Thử tìm với tên khác hoặc xóa bộ lọc mã SKU / mã vạch."
+                    )
+                }
             } else {
-                val rows = inventoryItems.chunked(2)
+                val rows = filteredPosItems.chunked(2)
                 items(rows) { pair ->
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         pair.forEach { item ->

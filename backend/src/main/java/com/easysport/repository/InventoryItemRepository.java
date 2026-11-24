@@ -8,4 +8,5 @@ import java.util.List;
 public interface InventoryItemRepository extends JpaRepository<InventoryItem, String> {
     List<InventoryItem> findByActiveTrueOrderByCourtIdAscNameAsc();
     List<InventoryItem> findByCourtIdAndActiveTrueOrderByNameAsc(String courtId);
+    List<InventoryItem> findByCourtIdAndActiveTrue(String courtId);
 }
