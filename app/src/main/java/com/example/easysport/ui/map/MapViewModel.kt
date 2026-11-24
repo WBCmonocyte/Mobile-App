@@ -23,6 +23,8 @@ data class MapUiState(
     val selectedSport: String = "Cầu lông",
     val searchQuery: String = "",
     val selectedCourtId: String? = null,
+    /** Chỉ set khi người dùng chủ động tap ghim — dùng để trigger camera animate. */
+    val userInitiatedCourtId: String? = null,
     val userLat: Double? = null,
     val userLng: Double? = null,
     val isLocationPermissionGranted: Boolean = false,
@@ -33,7 +35,6 @@ data class MapUiState(
 ) {
     val selectedCourtWithDistance: CourtWithDistance?
         get() = filteredCourts.firstOrNull { it.court.id == selectedCourtId }
-            ?: filteredCourts.firstOrNull()
 
     val nearbyCourtsCount: Int
         get() = filteredCourts.distinctBy { it.court.id }.size
@@ -43,12 +44,15 @@ data class MapUiState(
 }
 
 class MapViewModel(
-    initialSport: String? = null
+    initialSport: String? = null,
+    private val dispatcher: kotlinx.coroutines.CoroutineDispatcher = kotlinx.coroutines.Dispatchers.Main.immediate
 ) : ViewModel() {
 
     private val _selectedSport = MutableStateFlow(initialSport ?: "Tất cả")
     private val _searchQuery = MutableStateFlow("")
     private val _selectedCourtId = MutableStateFlow<String?>(null)
+    /** Set only when user taps a marker; drives camera animation in MapScreen. */
+    private val _userInitiatedCourtId = MutableStateFlow<String?>(null)
     private val _userLocation = MutableStateFlow<LocationFetchResult.Success?>(null)
     private val _isPermissionGranted = MutableStateFlow(false)
     private val _isGpsEnabled = MutableStateFlow(true)
@@ -59,12 +63,13 @@ class MapViewModel(
     val uiState: StateFlow<MapUiState> = _uiState.asStateFlow()
 
     init {
-        viewModelScope.launch {
+        viewModelScope.launch(dispatcher) {
             combine(
                 CourtStore.courts,
                 _selectedSport,
                 _searchQuery,
                 _selectedCourtId,
+                _userInitiatedCourtId,
                 _userLocation,
                 _isPermissionGranted,
                 _isGpsEnabled,
@@ -76,11 +81,12 @@ class MapViewModel(
                 val sport = args[1] as String
                 val query = args[2] as String
                 val selectedId = args[3] as String?
-                val userLoc = args[4] as LocationFetchResult.Success?
-                val permGranted = args[5] as Boolean
-                val gpsEnabled = args[6] as Boolean
-                val loadingLoc = args[7] as Boolean
-                val notice = args[8] as String?
+                val userInitiated = args[4] as String?
+                val userLoc = args[5] as LocationFetchResult.Success?
+                val permGranted = args[6] as Boolean
+                val gpsEnabled = args[7] as Boolean
+                val loadingLoc = args[8] as Boolean
+                val notice = args[9] as String?
 
                 val effectiveCourts = courts
 
@@ -95,12 +101,34 @@ class MapViewModel(
                     applyRadiusFilter = true // Hiển thị các sân trên bản đồ, sắp xếp gần nhất lên đầu
                 )
 
+                // selectedCourtId: nếu đã chọn sân và còn trong danh sách -> giữ nguyên.
+                // Nếu danh sách sân đang tải (rỗng) -> giữ nguyên selectedId đã chọn.
+                // Nếu danh sách đã có sân mà chưa chọn -> chọn sân đầu tiên trong kết quả lọc.
+                val effectiveSelectedId = if (effectiveCourts.isEmpty()) {
+                    selectedId
+                } else {
+                    selectedId?.takeIf { id -> filtered.any { it.court.id == id } }
+                        ?: filtered.firstOrNull()?.court?.id
+                }
+
+                // Khi tự động chọn sân đầu tiên lần đầu (khi đã có danh sách sân), lưu lại vào _selectedCourtId
+                // để khi vị trí người dùng đến muộn, danh sách sắp xếp lại khoảng cách không làm nhảy lựa chọn sân hiện tại!
+                if (selectedId == null && effectiveSelectedId != null && effectiveCourts.isNotEmpty()) {
+                    _selectedCourtId.value = effectiveSelectedId
+                }
+
+                // userInitiatedCourtId: giữ nếu sân còn trong danh sách (hoặc khi danh sách sân đang tải)
+                val effectiveUserInitiated = userInitiated?.takeIf { id ->
+                    effectiveCourts.isEmpty() || filtered.any { it.court.id == id }
+                }
+
                 MapUiState(
                     courts = effectiveCourts,
                     filteredCourts = filtered,
                     selectedSport = sport,
                     searchQuery = query,
-                    selectedCourtId = selectedId?.takeIf { id -> filtered.any { it.court.id == id } } ?: filtered.firstOrNull()?.court?.id,
+                    selectedCourtId = effectiveSelectedId,
+                    userInitiatedCourtId = effectiveUserInitiated,
                     userLat = userLoc?.latitude,
                     userLng = userLoc?.longitude,
                     isLocationPermissionGranted = permGranted,
@@ -117,15 +145,18 @@ class MapViewModel(
 
     fun onSportSelected(sport: String) {
         _selectedSport.value = sport
-        _selectedCourtId.value = null // Để tự động chọn sân đầu tiên trong kết quả mới
+        _selectedCourtId.value = null // bỏ chọn khi đổi môn
+        _userInitiatedCourtId.value = null
     }
 
     fun onSearchQueryChanged(query: String) {
         _searchQuery.value = query
+        // không reset selection khi tìm kiếm để tránh camera nhảy
     }
 
     fun onCourtSelected(courtId: String) {
         _selectedCourtId.value = courtId
+        _userInitiatedCourtId.value = courtId // user chủ động chọn → trigger camera
     }
 
     fun onPermissionResult(granted: Boolean, context: Context) {
@@ -140,7 +171,7 @@ class MapViewModel(
 
     fun refreshLocation(context: Context) {
         if (_isLoadingLocation.value) return
-        viewModelScope.launch {
+        viewModelScope.launch(dispatcher) {
             _isLoadingLocation.value = true
             val hasPerm = LocationHelper.hasLocationPermission(context)
             _isPermissionGranted.value = hasPerm

@@ -427,6 +427,18 @@ public class OwnerController {
                 pricePerHour, morningPrice, afternoonPrice, eveningPrice,
                 "court_thanh_phat", latitude, longitude, sportType, indoor
         );
+        String city = body.get("city") != null ? String.valueOf(body.get("city")).trim() : null;
+        String district = body.get("district") != null ? String.valueOf(body.get("district")).trim() : null;
+        if ((city == null || city.isEmpty()) && address.contains(",")) {
+            String[] parts = address.split(",");
+            if (parts.length >= 2) {
+                String last = parts[parts.length - 1].trim().toLowerCase().replaceAll("[.\\s]", "");
+                if (last.contains("hanoi") || last.contains("hànội")) city = "Hà Nội";
+                else if (last.contains("hcm") || last.contains("tphcm") || last.contains("hochiminh") || last.contains("hồchíminh")) city = "TP. Hồ Chí Minh";
+            }
+        }
+        court.setCity(city);
+        court.setDistrict(district);
         for (int i = 1; i <= fieldCount; i++) {
             court.getFields().add(new CourtField(
                     courtId + "_f" + i,
@@ -470,6 +482,12 @@ public class OwnerController {
         }
         if (body.get("longitude") instanceof Number lng) {
             court.setLongitude(lng.doubleValue());
+        }
+        if (body.get("city") != null) {
+            court.setCity(String.valueOf(body.get("city")).trim());
+        }
+        if (body.get("district") != null) {
+            court.setDistrict(String.valueOf(body.get("district")).trim());
         }
         int pricePerHour = body.get("pricePerHour") instanceof Number n ? n.intValue() : court.getPricePerHour();
         int morningPrice = body.get("morningPrice") instanceof Number n ? n.intValue() : court.getMorningPrice();

@@ -3,19 +3,27 @@ package com.easysport.controller;
 import com.easysport.dto.ApiResponse;
 import com.easysport.entity.Booking;
 import com.easysport.entity.Court;
+import com.easysport.entity.CourtField;
+import com.easysport.entity.CourtHoldSlot;
+import com.easysport.entity.CourtResource;
 import com.easysport.entity.PosSale;
 import com.easysport.entity.ShiftReport;
 import com.easysport.entity.StaffShift;
 import com.easysport.entity.User;
 import com.easysport.repository.BookingRepository;
+import com.easysport.repository.CourtFieldRepository;
+import com.easysport.repository.CourtHoldSlotRepository;
 import com.easysport.repository.CourtRepository;
+import com.easysport.repository.CourtResourceRepository;
 import com.easysport.repository.PosSaleRepository;
 import com.easysport.repository.ShiftReportRepository;
 import com.easysport.repository.StaffShiftRepository;
 import com.easysport.service.AuthService;
+import com.easysport.service.CourtHoldTransactionService;
 import com.easysport.service.ShiftPlanningService;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.Clock;
@@ -26,6 +34,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import org.springframework.web.server.ResponseStatusException;
 
 @RestController
@@ -46,6 +55,10 @@ public class StaffController {
     private final PosSaleRepository posSaleRepository;
     private final ShiftPlanningService shiftPlanningService;
     private final Clock clock;
+    private final CourtHoldSlotRepository courtHoldSlotRepository;
+    private final CourtResourceRepository courtResourceRepository;
+    private final CourtFieldRepository courtFieldRepository;
+    private final CourtHoldTransactionService courtHoldTransactionService;
 
     public StaffController(AuthService authService,
                            BookingRepository bookingRepository,
@@ -55,6 +68,24 @@ public class StaffController {
                            PosSaleRepository posSaleRepository,
                            ShiftPlanningService shiftPlanningService,
                            Clock clock) {
+        this(authService, bookingRepository, courtRepository, staffShiftRepository,
+                shiftReportRepository, posSaleRepository, shiftPlanningService, clock,
+                null, null, null, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public StaffController(AuthService authService,
+                           BookingRepository bookingRepository,
+                           CourtRepository courtRepository,
+                           StaffShiftRepository staffShiftRepository,
+                           ShiftReportRepository shiftReportRepository,
+                           PosSaleRepository posSaleRepository,
+                           ShiftPlanningService shiftPlanningService,
+                           Clock clock,
+                           @org.springframework.beans.factory.annotation.Autowired(required = false) CourtHoldSlotRepository courtHoldSlotRepository,
+                           @org.springframework.beans.factory.annotation.Autowired(required = false) CourtResourceRepository courtResourceRepository,
+                           @org.springframework.beans.factory.annotation.Autowired(required = false) CourtFieldRepository courtFieldRepository,
+                           @org.springframework.beans.factory.annotation.Autowired(required = false) CourtHoldTransactionService courtHoldTransactionService) {
         this.authService = authService;
         this.bookingRepository = bookingRepository;
         this.courtRepository = courtRepository;
@@ -63,6 +94,10 @@ public class StaffController {
         this.posSaleRepository = posSaleRepository;
         this.shiftPlanningService = shiftPlanningService;
         this.clock = clock;
+        this.courtHoldSlotRepository = courtHoldSlotRepository;
+        this.courtResourceRepository = courtResourceRepository;
+        this.courtFieldRepository = courtFieldRepository;
+        this.courtHoldTransactionService = courtHoldTransactionService;
     }
 
     private User requireStaffOrOwner(String authHeader) {
@@ -120,6 +155,36 @@ public class StaffController {
         return ResponseEntity.ok(ApiResponse.success("Danh sách đơn đặt sân", list));
     }
 
+    public List<String> resolveResourceIds(String courtId, String fieldDetail) {
+        if (courtHoldTransactionService != null) {
+            try {
+                Court court = courtHoldTransactionService.resolveCourt(courtId);
+                CourtField field = courtHoldTransactionService.resolveField(court, fieldDetail);
+                return courtHoldTransactionService.resolvePhysicalResourceIds(court, field);
+            } catch (Exception ignored) {
+            }
+        }
+        Optional<Court> courtOpt = courtRepository.findById(courtId);
+        if (courtOpt.isPresent()) {
+            Court c = courtOpt.get();
+            if (c.getFields() != null) {
+                for (CourtField f : c.getFields()) {
+                    if (f.getId().equalsIgnoreCase(fieldDetail) || f.getDetail().equalsIgnoreCase(fieldDetail) || f.getLabel().equalsIgnoreCase(fieldDetail)) {
+                        if (f.getResourceKeys() != null && !f.getResourceKeys().isBlank()) {
+                            return Arrays.stream(f.getResourceKeys().split(","))
+                                    .map(String::trim)
+                                    .filter(s -> !s.isEmpty())
+                                    .collect(Collectors.toList());
+                        }
+                        return List.of(courtId + ":" + f.getId());
+                    }
+                }
+            }
+        }
+        return List.of(courtId + ":" + fieldDetail);
+    }
+
+    @Transactional(rollbackFor = Exception.class, isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     @PostMapping("/bookings/walk-in")
     public ResponseEntity<ApiResponse<Booking>> createWalkInBooking(
             @RequestHeader(value = "Authorization", required = false) String authHeader,
@@ -149,6 +214,37 @@ public class StaffController {
 
         String todayStr = LocalDate.now(clock).format(DATE_FORMAT);
         LocalTime[] requestedTimes = extractTimeInterval(timeRange);
+
+        List<String> resourceIds = new ArrayList<>(resolveResourceIds(courtId, fieldDetail));
+        Collections.sort(resourceIds);
+        if (courtResourceRepository != null) {
+            for (String resId : resourceIds) {
+                if (!courtResourceRepository.existsById(resId)) {
+                    courtResourceRepository.save(new CourtResource(resId, courtId, "Resource " + resId, "Auto-created"));
+                }
+            }
+            courtResourceRepository.lockResourcesForUpdate(resourceIds);
+        }
+
+        int reqStartMin = requestedTimes != null ? requestedTimes[0].getHour() * 60 + requestedTimes[0].getMinute() : 0;
+        int reqEndMin = requestedTimes != null ? requestedTimes[1].getHour() * 60 + requestedTimes[1].getMinute() : 1440;
+
+        if (courtHoldSlotRepository != null) {
+            List<CourtHoldSlot> activeHolds = courtHoldSlotRepository.findOverlappingActiveSlots(
+                    resourceIds,
+                    todayStr,
+                    reqStartMin,
+                    reqEndMin,
+                    LocalDateTime.now(clock)
+            );
+            if (!activeHolds.isEmpty()) {
+                throw new ResponseStatusException(
+                        HttpStatus.CONFLICT,
+                        "Sân " + fieldDetail + " hiện đang có khách giữ chỗ hoặc đặt online trong khung giờ này!"
+                );
+            }
+        }
+
         List<Booking> existingBookings = bookingRepository.findAllByOrderByCreatedAtDesc();
         for (Booking existing : existingBookings) {
             if (!Objects.equals(courtId, existing.getCourtId())) continue;
@@ -195,6 +291,27 @@ public class StaffController {
                 LocalDateTime.now(clock).plusHours(2)
         );
         bookingRepository.save(walkIn);
+
+        if (courtHoldSlotRepository != null) {
+            LocalDateTime now = LocalDateTime.now(clock);
+            LocalDateTime slotExpiry = now.plusDays(1);
+            for (String resId : resourceIds) {
+                CourtHoldSlot bookedSlot = new CourtHoldSlot(
+                        UUID.randomUUID().toString().replace("-", ""),
+                        "WALK-" + walkIn.getId(),
+                        courtId,
+                        resId,
+                        todayStr,
+                        reqStartMin,
+                        reqEndMin,
+                        timeRange,
+                        "BOOKED",
+                        slotExpiry
+                );
+                courtHoldSlotRepository.save(bookedSlot);
+            }
+        }
+
         return ResponseEntity.ok(ApiResponse.success("Đã tạo lượt thuê trực tiếp tại quầy", walkIn));
     }
 
@@ -217,6 +334,7 @@ public class StaffController {
         return ResponseEntity.ok(ApiResponse.success("Check-in thành công", booking));
     }
 
+    @Transactional(rollbackFor = Exception.class, isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
     @PostMapping("/bookings/{id}/services")
     public ResponseEntity<ApiResponse<Booking>> addPosServices(
             @PathVariable String id,
@@ -244,6 +362,36 @@ public class StaffController {
                 if (bookingTimes != null && bookingDate != null) {
                     LocalTime oldEnd = bookingTimes[1];
                     LocalTime newEnd = oldEnd.plusMinutes(extraMinutes);
+                    int extStartMin = oldEnd.getHour() * 60 + oldEnd.getMinute();
+                    int extEndMin = newEnd.getHour() * 60 + newEnd.getMinute();
+                    List<String> resIds = new ArrayList<>(resolveResourceIds(booking.getCourtId(), booking.getFieldDetail()));
+                    Collections.sort(resIds);
+
+                    if (courtResourceRepository != null) {
+                        for (String rId : resIds) {
+                            if (!courtResourceRepository.existsById(rId)) {
+                                courtResourceRepository.save(new CourtResource(rId, booking.getCourtId(), "Resource " + rId, "Auto-created"));
+                            }
+                        }
+                        courtResourceRepository.lockResourcesForUpdate(resIds);
+                    }
+
+                    if (courtHoldSlotRepository != null) {
+                        List<CourtHoldSlot> activeHolds = courtHoldSlotRepository.findOverlappingActiveSlots(
+                                resIds,
+                                bookingDate,
+                                extStartMin,
+                                extEndMin,
+                                LocalDateTime.now(clock)
+                        );
+                        if (!activeHolds.isEmpty()) {
+                            throw new ResponseStatusException(
+                                    HttpStatus.CONFLICT,
+                                    "Không thể gia hạn vì khung giờ kế tiếp đã có khách giữ chỗ hoặc đặt online."
+                            );
+                        }
+                    }
+
                     List<Booking> existingBookings = bookingRepository.findAllByOrderByCreatedAtDesc();
                     for (Booking other : existingBookings) {
                         if (Objects.equals(booking.getId(), other.getId())) continue;
@@ -263,6 +411,25 @@ public class StaffController {
                         }
                     }
                     booking.setTimeRange(bookingTimes[0].format(TIME_FORMAT) + " - " + newEnd.format(TIME_FORMAT));
+
+                    if (courtHoldSlotRepository != null) {
+                        LocalDateTime now = LocalDateTime.now(clock);
+                        for (String rId : resIds) {
+                            CourtHoldSlot extSlot = new CourtHoldSlot(
+                                    UUID.randomUUID().toString().replace("-", ""),
+                                    "EXT-" + booking.getId(),
+                                    booking.getCourtId(),
+                                    rId,
+                                    bookingDate,
+                                    extStartMin,
+                                    extEndMin,
+                                    oldEnd.format(TIME_FORMAT) + " - " + newEnd.format(TIME_FORMAT),
+                                    "BOOKED",
+                                    now.plusDays(1)
+                            );
+                            courtHoldSlotRepository.save(extSlot);
+                        }
+                    }
                 }
             }
         }
@@ -685,7 +852,7 @@ public class StaffController {
                         .findFirst());
     }
 
-    static boolean bookingMatchesShift(Booking booking, StaffShift shift) {
+    public static boolean bookingMatchesShift(Booking booking, StaffShift shift) {
         if (booking == null || shift == null) return false;
         if (shift.getCourtId() != null && !shift.getCourtId().isBlank()
                 && booking.getCourtId() != null && !booking.getCourtId().isBlank()
@@ -704,13 +871,13 @@ public class StaffController {
         return true;
     }
 
-    static String extractDate(String dateLabel) {
+    public static String extractDate(String dateLabel) {
         if (dateLabel == null || dateLabel.isBlank()) return null;
         Matcher m = DATE_PATTERN.matcher(dateLabel);
         return m.find() ? m.group(1) : null;
     }
 
-    static LocalTime[] extractTimeInterval(String timeRange) {
+    public static LocalTime[] extractTimeInterval(String timeRange) {
         if (timeRange == null || timeRange.isBlank()) return null;
         Matcher m = TIME_PATTERN.matcher(timeRange);
         List<LocalTime> times = new ArrayList<>();
@@ -739,14 +906,14 @@ public class StaffController {
                         .findFirst());
     }
 
-    static boolean subFieldsOverlap(String fieldA, String fieldB) {
+    public static boolean subFieldsOverlap(String fieldA, String fieldB) {
         String a = fieldA != null ? fieldA.trim().toLowerCase() : "";
         String b = fieldB != null ? fieldB.trim().toLowerCase() : "";
         if (a.isEmpty() || b.isEmpty()) return true;
         return a.equals(b) || a.contains(b) || b.contains(a);
     }
 
-    static boolean isQrMethod(String method) {
+    public static boolean isQrMethod(String method) {
         if (method == null) return false;
         String m = method.trim().toUpperCase();
         return m.contains("QR") || m.contains("VIETQR") || m.contains("TRANSFER");

@@ -41,6 +41,14 @@ class NetworkAuthRepository : AuthRepository {
             password = password
         )
         return result.fold(
+            onSuccess = { AuthResult.VerificationRequired(it) },
+            onFailure = { AuthResult.Error(it.localizedMessage ?: "Không thể gửi mã xác nhận.") }
+        )
+    }
+
+    override suspend fun verifyRegistration(challengeId: String, code: String): AuthResult {
+        val result = PaymentApiClient.verifyRegistration(challengeId, code)
+        return result.fold(
             onSuccess = { authData ->
                 SessionManager.saveSession(authData.token, authData.user)
                 UserStore.update(authData.user)
@@ -56,4 +64,3 @@ class NetworkAuthRepository : AuthRepository {
         val instance: NetworkAuthRepository by lazy { NetworkAuthRepository() }
     }
 }
-

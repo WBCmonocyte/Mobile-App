@@ -103,6 +103,8 @@ public class DataInitializer implements CommandLineRunner {
             fields1.add(new CourtField("field_tp_1", court1, "Sân 7", "Sân 7 người tiêu chuẩn FIFA cỏ nhân tạo mới", "7_VS_7", "court_thanh_phat:g1"));
             fields1.add(new CourtField("field_tp_2", court1, "Sân 11", "Sân 11 người kích thước chuẩn thi đấu có khán đài", "11_VS_11", "court_thanh_phat:g1,court_thanh_phat:g2"));
             court1.setFields(fields1);
+            court1.setCity("TP. Hồ Chí Minh");
+            court1.setDistrict("Tân Bình");
             courtRepository.save(court1);
 
             // Sân 2: Hoàng Gia
@@ -120,6 +122,8 @@ public class DataInitializer implements CommandLineRunner {
             fields2.add(new CourtField("field_hg_2", court2, "Sân 5B", "Sân 5 mini có mái che", "5_VS_5", "court_hoang_gia:g2"));
             fields2.add(new CourtField("field_hg_3", court2, "Sân 7", "Sân 7 người dàn đèn chiếu sáng hiện đại", "7_VS_7", "court_hoang_gia:g1,court_hoang_gia:g2"));
             court2.setFields(fields2);
+            court2.setCity("TP. Hồ Chí Minh");
+            court2.setDistrict("Gò Vấp");
             courtRepository.save(court2);
 
             // Sân 3: Cầu lông Tân Bình
@@ -137,6 +141,8 @@ public class DataInitializer implements CommandLineRunner {
             fields3.add(new CourtField("field_cl_2", court3, "Sân số 2", "Thảm Yonex chuyên dụng", "BADMINTON", "court_cau_long_tan_binh:g2"));
             fields3.add(new CourtField("field_cl_3", court3, "Sân số 3", "Thảm cao su cao cấp", "BADMINTON", "court_cau_long_tan_binh:g3"));
             court3.setFields(fields3);
+            court3.setCity("TP. Hồ Chí Minh");
+            court3.setDistrict("Tân Bình");
             courtRepository.save(court3);
 
             // Sân 4: Pickleball Việt Nhật
@@ -153,6 +159,8 @@ public class DataInitializer implements CommandLineRunner {
             fields4.add(new CourtField("field_pb_1", court4, "Sân P1 Ngoài trời", "Mặt sân Acrylic tiêu chuẩn Mỹ", "PICKLEBALL", "court_pickleball_viet_nhat:g1"));
             fields4.add(new CourtField("field_pb_2", court4, "Sân P2 Trong nhà", "Có máy lạnh và đèn chống lóa", "PICKLEBALL", "court_pickleball_viet_nhat:g2"));
             court4.setFields(fields4);
+            court4.setCity("TP. Hồ Chí Minh");
+            court4.setDistrict("Tân Bình");
             courtRepository.save(court4);
 
             // Sân 5: Chảo Lửa
@@ -169,9 +177,28 @@ public class DataInitializer implements CommandLineRunner {
             fields5.add(new CourtField("field_clua_1", court5, "Sân A", "Sân cỏ nhân tạo 7 người", "7_VS_7", "court_chao_lua:g1"));
             fields5.add(new CourtField("field_clua_2", court5, "Sân B", "Sân cỏ nhân tạo 5 người", "5_VS_5", "court_chao_lua:g2"));
             court5.setFields(fields5);
+            court5.setCity("TP. Hồ Chí Minh");
+            court5.setDistrict("Tân Bình");
             courtRepository.save(court5);
 
             System.out.println(">>> Đã khởi tạo dữ liệu mẫu cho bảng Courts & CourtFields");
+        } else {
+            List<Court> existingCourts = courtRepository.findAll();
+            for (Court c : existingCourts) {
+                boolean changed = false;
+                if (c.getCity() == null && c.getAddress() != null) {
+                    if (c.getAddress().contains("Hà Nội")) {
+                        c.setCity("Hà Nội");
+                        changed = true;
+                    } else if (c.getAddress().contains("TP. HCM") || c.getAddress().contains("Hồ Chí Minh")) {
+                        c.setCity("TP. Hồ Chí Minh");
+                        if (c.getAddress().contains("Tân Bình")) c.setDistrict("Tân Bình");
+                        else if (c.getAddress().contains("Gò Vấp")) c.setDistrict("Gò Vấp");
+                        changed = true;
+                    }
+                }
+                if (changed) courtRepository.save(c);
+            }
         }
 
         // 3. Seed Physical Court Resources if empty

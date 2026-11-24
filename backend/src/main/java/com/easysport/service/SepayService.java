@@ -13,6 +13,7 @@ import com.easysport.repository.CourtRepository;
 import com.easysport.repository.PaymentRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -36,15 +37,17 @@ public class SepayService {
     private final CourtHoldRepository courtHoldRepository;
     private final CourtHoldSlotRepository courtHoldSlotRepository;
     private final Clock clock;
+    private final NotificationService notificationService;
 
-    @org.springframework.beans.factory.annotation.Autowired
+    @Autowired
     public SepayService(SepayConfig sepayConfig,
                         PaymentRepository paymentRepository,
                         BookingRepository bookingRepository,
                         CourtRepository courtRepository,
                         CourtHoldRepository courtHoldRepository,
                         CourtHoldSlotRepository courtHoldSlotRepository,
-                        Clock clock) {
+                        Clock clock,
+                        @Autowired(required = false) NotificationService notificationService) {
         this.sepayConfig = sepayConfig;
         this.paymentRepository = paymentRepository;
         this.bookingRepository = bookingRepository;
@@ -52,6 +55,17 @@ public class SepayService {
         this.courtHoldRepository = courtHoldRepository;
         this.courtHoldSlotRepository = courtHoldSlotRepository;
         this.clock = clock;
+        this.notificationService = notificationService;
+    }
+
+    public SepayService(SepayConfig sepayConfig,
+                        PaymentRepository paymentRepository,
+                        BookingRepository bookingRepository,
+                        CourtRepository courtRepository,
+                        CourtHoldRepository courtHoldRepository,
+                        CourtHoldSlotRepository courtHoldSlotRepository,
+                        Clock clock) {
+        this(sepayConfig, paymentRepository, bookingRepository, courtRepository, courtHoldRepository, courtHoldSlotRepository, clock, null);
     }
 
     // Constructor tiện lợi cho test độc lập (không đánh dấu @Autowired để Spring dùng constructor đầy đủ)
@@ -59,7 +73,7 @@ public class SepayService {
                         PaymentRepository paymentRepository,
                         BookingRepository bookingRepository,
                         CourtRepository courtRepository) {
-        this(sepayConfig, paymentRepository, bookingRepository, courtRepository, null, null, Clock.systemDefaultZone());
+        this(sepayConfig, paymentRepository, bookingRepository, courtRepository, null, null, Clock.systemDefaultZone(), null);
     }
 
     public static class PriceResult {
@@ -302,6 +316,11 @@ public class SepayService {
         booking.setStatus(status);
         booking.setPayment(status);
         bookingRepository.save(booking);
+
+        if (notificationService != null) {
+            notificationService.createPaymentReceivedNotif(booking, lockedPayment);
+            notificationService.createBookingConfirmedNotif(booking);
+        }
         return true;
     }
 
@@ -367,6 +386,10 @@ public class SepayService {
             String status = "CASH_ON_SITE".equals(payment.getPaymentMethod()) ? "DEPOSIT_PAID" : "PAID";
             booking.setStatus(status);
             booking.setPayment(status);
+            if (notificationService != null) {
+                notificationService.createPaymentReceivedNotif(booking, payment);
+                notificationService.createBookingConfirmedNotif(booking);
+            }
         } else {
             // Preserve a previously confirmed booking if a legacy second attempt is paid.
             if (hold == null || !hold.isConfirmed()) {

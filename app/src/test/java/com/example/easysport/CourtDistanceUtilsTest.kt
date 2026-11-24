@@ -31,7 +31,9 @@ class CourtDistanceUtilsTest {
             sportType = sportType,
             indoor = false,
             latitude = lat,
-            longitude = lng
+            longitude = lng,
+            city = "Hà Nội",
+            district = "Cầu Giấy"
         )
     }
 

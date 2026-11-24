@@ -18,6 +18,8 @@ data class CourtEntity(
     val longitude: Double? = null,
     val sportType: String = "Bóng đá",
     val indoor: Boolean = false,
+    val city: String? = null,
+    val district: String? = null,
 )
 
 fun CourtEntity.toDomainModel(
@@ -41,6 +43,8 @@ fun CourtEntity.toDomainModel(
         indoor = indoor,
         latitude = latitude,
         longitude = longitude,
+        city = city,
+        district = district,
     )
 }
 
@@ -58,5 +62,7 @@ fun Court.toEntity(): CourtEntity {
         longitude = longitude,
         sportType = sportType,
         indoor = indoor,
+        city = city,
+        district = district,
     )
 }

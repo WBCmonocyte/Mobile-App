@@ -1,4 +1,4 @@
-﻿package com.example.easysport.ui.signup
+package com.example.easysport.ui.signup
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
@@ -40,9 +41,12 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.SelectableDates
 import androidx.compose.material3.Text
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import kotlinx.coroutines.delay
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -288,7 +292,7 @@ fun SignUpPasswordScreen(
 
         Spacer(Modifier.height(24.dp))
         PrimaryButton(
-            text = "Complete",
+            text = "Gửi mã xác nhận",
             onClick = onComplete,
             enabled = !isLoading,
             isLoading = isLoading,
@@ -349,6 +353,60 @@ fun SignUpPasswordScreen(
 // Thành phần dùng chung
 // =====================================================================
 @Composable
+internal fun SignUpVerificationScreen(
+    challengeId: String,
+    email: String,
+    isLoading: Boolean,
+    error: String?,
+    onVerify: (String) -> Unit,
+    onResend: () -> Unit,
+    onBack: () -> Unit,
+) {
+    var code by remember(challengeId) { mutableStateOf("") }
+    var resendSeconds by remember(challengeId) { mutableStateOf(60) }
+    LaunchedEffect(challengeId) {
+        while (resendSeconds > 0) {
+            delay(1000)
+            resendSeconds--
+        }
+    }
+    ScreenContainer {
+        Spacer(Modifier.height(16.dp))
+        SignUpHeader(step = 3)
+        Spacer(Modifier.height(24.dp))
+        ScreenTitle("Xác nhận email")
+        Spacer(Modifier.height(8.dp))
+        Text("Nhập mã 6 chữ số đã gửi tới $email", color = BodyColor)
+        Spacer(Modifier.height(16.dp))
+        OutlinedTextField(
+            value = code,
+            onValueChange = { code = it.filter { char -> char in '0'..'9' }.take(6) },
+            label = { Text("Mã xác nhận") },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            singleLine = true,
+            enabled = !isLoading,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        if (error != null) {
+            Spacer(Modifier.height(8.dp))
+            Text(error, color = ErrorColor)
+        }
+        Spacer(Modifier.height(16.dp))
+        PrimaryButton(
+            text = "Xác nhận",
+            onClick = { onVerify(code) },
+            enabled = !isLoading && code.length == 6,
+        )
+        TextButton(onClick = onResend, enabled = !isLoading && resendSeconds == 0) {
+            Text(if (resendSeconds > 0) "Gửi lại mã ($resendSeconds giây)" else "Gửi lại mã")
+        }
+        TextButton(onClick = onBack, enabled = !isLoading) {
+            Text("Quay lại")
+        }
+    }
+}
+
+@Composable
 private fun ScreenContainer(content: @Composable ColumnScope.() -> Unit) {
     Column(
         modifier = Modifier
@@ -365,7 +423,7 @@ private fun ScreenContainer(content: @Composable ColumnScope.() -> Unit) {
 
 /** Logo + chỉ báo "Step x of y" ở góc phải. */
 @Composable
-private fun SignUpHeader(step: Int, totalSteps: Int = 2) {
+private fun SignUpHeader(step: Int, totalSteps: Int = 3) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,

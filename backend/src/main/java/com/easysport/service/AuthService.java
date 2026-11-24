@@ -69,13 +69,6 @@ public class AuthService {
         String email = request.getEmail().trim().toLowerCase();
         String phone = request.getPhone().trim();
 
-        if (userRepository.existsByEmail(email)) {
-            throw new IllegalArgumentException("Email này đã được đăng ký.");
-        }
-        if (userRepository.existsByPhone(phone)) {
-            throw new IllegalArgumentException("Số điện thoại này đã được đăng ký.");
-        }
-
         LocalDate dob = null;
         try {
             if (request.getDateOfBirth() != null && !request.getDateOfBirth().isBlank()) {
@@ -83,14 +76,30 @@ public class AuthService {
             }
         } catch (Exception ignored) {}
 
-        String passwordHash = PasswordHasher.hash(request.getPassword());
+        return createVerifiedAccount(email, phone, request.getFullName().trim(),
+                request.getAddress() != null ? request.getAddress().trim() : "", dob,
+                PasswordHasher.hash(request.getPassword()));
+    }
+
+    void ensureAvailable(String email, String phone) {
+        if (userRepository.existsByEmail(email)) {
+            throw new IllegalArgumentException("Email này đã được đăng ký.");
+        }
+        if (userRepository.existsByPhone(phone)) {
+            throw new IllegalArgumentException("Số điện thoại này đã được đăng ký.");
+        }
+    }
+
+    AuthResponse createVerifiedAccount(String email, String phone, String fullName, String address,
+                                       LocalDate dob, String passwordHash) {
+        ensureAvailable(email, phone);
         User newUser = new User(
                 "u_" + UUID.randomUUID().toString().replace("-", "").substring(0, 10),
                 email,
                 passwordHash,
-                request.getFullName().trim(),
+                fullName,
                 phone,
-                request.getAddress() != null ? request.getAddress().trim() : "",
+                address != null ? address : "",
                 dob,
                 "USER",
                 false
