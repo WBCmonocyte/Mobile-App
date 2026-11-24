@@ -93,8 +93,29 @@ dependencies {
     implementation(libs.maps.compose)
     implementation(libs.play.services.maps)
     implementation(libs.play.services.location)
+    implementation("org.osmdroid:osmdroid-android:6.1.20")
 
     implementation(libs.androidx.room.runtime)
     implementation(libs.androidx.room.ktx)
     ksp(libs.androidx.room.compiler)
+}
+
+tasks.register("setupAdbReverse") {
+    doLast {
+        try {
+            val sdkDir = localProperties.getProperty("sdk.dir") ?: System.getenv("ANDROID_HOME") ?: System.getenv("ANDROID_SDK_ROOT")
+            val adbExe = if (!sdkDir.isNullOrBlank()) {
+                val candidate = file("$sdkDir/platform-tools/adb.exe")
+                if (candidate.exists()) candidate.absolutePath else "adb"
+            } else {
+                "adb"
+            }
+            val process = ProcessBuilder(adbExe, "reverse", "tcp:8080", "tcp:8080").start()
+            process.waitFor()
+        } catch (_: Exception) {}
+    }
+}
+
+tasks.matching { it.name.startsWith("install") || it.name == "assembleDebug" }.configureEach {
+    dependsOn("setupAdbReverse")
 }

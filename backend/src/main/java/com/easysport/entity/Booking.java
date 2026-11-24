@@ -66,6 +66,12 @@ public class Booking {
     @Column(name = "hold_expires_at")
     private LocalDateTime holdExpiresAt = LocalDateTime.now().plusMinutes(15);
 
+    @Column(name = "service_note", length = 500)
+    private String serviceNote = "";
+
+    @Column(name = "service_amount")
+    private Integer serviceAmount = 0;
+
     public Booking() {}
 
     public Booking(String id, String userId, String courtId, String courtName, String fieldDetail,
@@ -160,6 +166,12 @@ public class Booking {
 
     public LocalDateTime getHoldExpiresAt() { return holdExpiresAt; }
     public void setHoldExpiresAt(LocalDateTime holdExpiresAt) { this.holdExpiresAt = holdExpiresAt; }
+
+    public String getServiceNote() { return serviceNote != null ? serviceNote : ""; }
+    public void setServiceNote(String serviceNote) { this.serviceNote = serviceNote != null ? serviceNote : ""; }
+
+    public Integer getServiceAmount() { return serviceAmount != null ? serviceAmount : 0; }
+    public void setServiceAmount(Integer serviceAmount) { this.serviceAmount = serviceAmount != null ? serviceAmount : 0; }
 
     public boolean isExpired() {
         return "PENDING".equalsIgnoreCase(this.status) &&

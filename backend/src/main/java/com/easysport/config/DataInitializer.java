@@ -4,11 +4,15 @@ import com.easysport.entity.Booking;
 import com.easysport.entity.Court;
 import com.easysport.entity.CourtField;
 import com.easysport.entity.CourtResource;
+import com.easysport.entity.ShiftReport;
+import com.easysport.entity.StaffShift;
 import com.easysport.entity.User;
 import com.easysport.repository.BookingRepository;
 import com.easysport.repository.CourtFieldRepository;
 import com.easysport.repository.CourtRepository;
 import com.easysport.repository.CourtResourceRepository;
+import com.easysport.repository.ShiftReportRepository;
+import com.easysport.repository.StaffShiftRepository;
 import com.easysport.repository.UserRepository;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.stereotype.Component;
@@ -29,17 +33,23 @@ public class DataInitializer implements CommandLineRunner {
     private final CourtFieldRepository courtFieldRepository;
     private final CourtResourceRepository courtResourceRepository;
     private final BookingRepository bookingRepository;
+    private final StaffShiftRepository staffShiftRepository;
+    private final ShiftReportRepository shiftReportRepository;
 
     public DataInitializer(UserRepository userRepository,
                            CourtRepository courtRepository,
                            CourtFieldRepository courtFieldRepository,
                            CourtResourceRepository courtResourceRepository,
-                           BookingRepository bookingRepository) {
+                           BookingRepository bookingRepository,
+                           StaffShiftRepository staffShiftRepository,
+                           ShiftReportRepository shiftReportRepository) {
         this.userRepository = userRepository;
         this.courtRepository = courtRepository;
         this.courtFieldRepository = courtFieldRepository;
         this.courtResourceRepository = courtResourceRepository;
         this.bookingRepository = bookingRepository;
+        this.staffShiftRepository = staffShiftRepository;
+        this.shiftReportRepository = shiftReportRepository;
     }
 
     @Override
@@ -224,6 +234,115 @@ public class DataInitializer implements CommandLineRunner {
             );
             bookingRepository.save(sampleBooking);
             System.out.println(">>> Đã khởi tạo đơn đặt sân mẫu (PAID)");
+        }
+
+        // 6. Ensure STAFF & OWNER demo accounts exist
+        if (!userRepository.existsByEmail("owner@easysport.vn")) {
+            userRepository.save(new User(
+                    "user_owner_demo",
+                    "0988776655",
+                    com.easysport.util.PasswordHasher.hash("123456"),
+                    "Trần Chủ Sân",
+                    "owner@easysport.vn",
+                    "Quận 3, TP. HCM",
+                    "OWNER"
+            ));
+        }
+        if (!userRepository.existsByEmail("staff@easysport.vn")) {
+            userRepository.save(new User(
+                    "user_staff_1",
+                    "0911223344",
+                    com.easysport.util.PasswordHasher.hash("123456"),
+                    "Trần Thị Nhân Viên",
+                    "staff@easysport.vn",
+                    "Quận Tân Bình, TP. HCM",
+                    "STAFF"
+            ));
+        }
+        if (!userRepository.existsByEmail("trucsan@easysport.vn")) {
+            userRepository.save(new User(
+                    "user_staff_2",
+                    "0977112233",
+                    com.easysport.util.PasswordHasher.hash("123456"),
+                    "Nguyễn Văn Trực Sân",
+                    "trucsan@easysport.vn",
+                    "Quận Tân Bình, TP. HCM",
+                    "STAFF"
+            ));
+        }
+        if (!userRepository.existsByEmail("thungan@easysport.vn")) {
+            userRepository.save(new User(
+                    "user_staff_3",
+                    "0966554433",
+                    com.easysport.util.PasswordHasher.hash("123456"),
+                    "Lê Minh Thu Ngân",
+                    "thungan@easysport.vn",
+                    "Quận Tân Bình, TP. HCM",
+                    "STAFF"
+            ));
+        }
+
+        // 7. Seed Staff Shifts if empty
+        if (staffShiftRepository.count() == 0) {
+            String todayStr = LocalDate.now().format(DateTimeFormatter.ofPattern("dd/MM/yyyy"));
+            String tomorrowStr = LocalDate.now().plusDays(1).format(DateTimeFormatter.ofPattern("dd/MM/yyyy"));
+            staffShiftRepository.saveAll(Arrays.asList(
+                    new StaffShift("sh_1", "user_staff_1", "Trần Thị Nhân Viên", "0911223344",
+                            "court_thanh_phat", "Sân bóng Thành Phát", todayStr, "Ca Chiều (12:00 - 17:00)",
+                            "Lễ tân & Thu ngân", "ACTIVE", "11:58", null,
+                            "Đón khách đặt online và khách vãng lai buổi chiều."),
+                    new StaffShift("sh_2", "user_staff_1", "Trần Thị Nhân Viên", "0911223344",
+                            "court_thanh_phat", "Sân bóng Thành Phát", tomorrowStr, "Ca Sáng (06:00 - 12:00)",
+                            "Lễ tân & Thu ngân", "UPCOMING", null, null,
+                            "Ca sáng đón các đội đá sớm."),
+                    new StaffShift("sh_3", "user_staff_2", "Nguyễn Văn Trực Sân", "0977112233",
+                            "court_thanh_phat", "Sân bóng Thành Phát", todayStr, "Ca Sáng (06:00 - 12:00)",
+                            "Trực sân & POS", "COMPLETED", "05:55", "12:02",
+                            "Kiểm tra đèn, lưới và bơm bóng trước giờ mở sân."),
+                    new StaffShift("sh_4", "user_staff_2", "Nguyễn Văn Trực Sân", "0977112233",
+                            "court_thanh_phat", "Sân bóng Thành Phát", tomorrowStr, "Ca Tối (17:00 - 23:00)",
+                            "Trực sân & POS", "UPCOMING", null, null,
+                            "Trực khung giờ cao điểm buổi tối."),
+                    new StaffShift("sh_5", "user_staff_3", "Lê Minh Thu Ngân", "0966554433",
+                            "court_thanh_phat", "Sân bóng Thành Phát", todayStr, "Ca Tối (17:00 - 23:00)",
+                            "Lễ tân & Thu ngân", "UPCOMING", null, null,
+                            "Thu ngân quầy POS và đối soát cuối ngày."),
+                    new StaffShift("sh_6", "user_staff_3", "Lê Minh Thu Ngân", "0966554433",
+                            "court_thanh_phat", "Sân bóng Thành Phát", tomorrowStr, "Ca Chiều (12:00 - 17:00)",
+                            "Lễ tân & Thu ngân", "UPCOMING", null, null,
+                            "Trực quầy lễ tân buổi chiều.")
+            ));
+        } else {
+            // Chuẩn hóa khung giờ ca cũ (06-14 / 14-22) nếu tồn tại trong DB từ bản trước
+            List<StaffShift> allShifts = staffShiftRepository.findAll();
+            for (StaffShift sh : allShifts) {
+                if ("Ca Sáng (06:00 - 14:00)".equals(sh.getShiftSlot())) {
+                    sh.setShiftSlot("Ca Sáng (06:00 - 12:00)");
+                    staffShiftRepository.save(sh);
+                } else if ("Ca Chiều (14:00 - 22:00)".equals(sh.getShiftSlot())) {
+                    sh.setShiftSlot("Ca Chiều (12:00 - 17:00)");
+                    staffShiftRepository.save(sh);
+                }
+            }
+        }
+
+        // 8. Seed Shift Report if empty
+        if (shiftReportRepository.count() == 0) {
+            String todayStr = LocalDate.now().format(DateTimeFormatter.ofPattern("dd/MM/yyyy"));
+            shiftReportRepository.save(new ShiftReport(
+                    "rep_1",
+                    "court_thanh_phat",
+                    "Sân bóng Thành Phát",
+                    "user_staff_2",
+                    "Nguyễn Văn Trực Sân",
+                    todayStr + " (Ca Sáng 06:00 - 12:00)",
+                    450000,
+                    300000,
+                    3,
+                    "Đã kiểm đếm đủ 450.000 đ tiền mặt bàn giao trong két. Lưới sân 2 đã kiểm tra chắc chắn, bóng thi đấu đủ 6 quả.",
+                    "PENDING",
+                    null
+            ));
         }
     }
 }

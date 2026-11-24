@@ -15,6 +15,7 @@ object SessionManager {
     private const val KEY_USER_PHONE = "user_phone"
     private const val KEY_USER_ADDRESS = "user_address"
     private const val KEY_USER_DOB = "user_dob"
+    private const val KEY_USER_ROLE = "user_role"
 
     private var prefs: SharedPreferences? = null
 
@@ -38,6 +39,7 @@ object SessionManager {
             putString(KEY_USER_PHONE, user.phone)
             putString(KEY_USER_ADDRESS, user.address)
             putString(KEY_USER_DOB, user.dateOfBirth)
+            putString(KEY_USER_ROLE, user.role)
             apply()
         }
     }
@@ -50,6 +52,7 @@ object SessionManager {
             putString(KEY_USER_PHONE, user.phone)
             putString(KEY_USER_ADDRESS, user.address)
             putString(KEY_USER_DOB, user.dateOfBirth)
+            putString(KEY_USER_ROLE, user.role)
             apply()
         }
     }
@@ -65,7 +68,8 @@ object SessionManager {
         val phone = prefs?.getString(KEY_USER_PHONE, "") ?: ""
         val address = prefs?.getString(KEY_USER_ADDRESS, "") ?: ""
         val dob = prefs?.getString(KEY_USER_DOB, "") ?: ""
-        return User(id = id, email = email, name = name, phone = phone, address = address, dateOfBirth = dob)
+        val role = prefs?.getString(KEY_USER_ROLE, "USER") ?: "USER"
+        return User(id = id, email = email, name = name, phone = phone, address = address, dateOfBirth = dob, role = role)
     }
 
     fun isLoggedIn(): Boolean = !getToken().isNullOrBlank()
