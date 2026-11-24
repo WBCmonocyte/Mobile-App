@@ -4,8 +4,10 @@ import android.net.Uri
 import com.example.easysport.data.model.Booking
 import com.example.easysport.data.model.BookingRequest
 import com.example.easysport.data.model.Court
+import com.example.easysport.data.model.NewsItem
 import com.example.easysport.data.model.PaymentMethod
 import com.example.easysport.data.model.PaymentStatus
+import com.example.easysport.data.model.TournamentItem
 import com.example.easysport.data.model.User
 import com.example.easysport.data.model.mergedTimeRange
 import kotlinx.coroutines.Dispatchers
@@ -214,7 +216,7 @@ object PaymentApiClient {
         email: String,
         address: String,
         password: String
-    ): Result<AuthResultData> = withContext(Dispatchers.IO) {
+    ): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
             val endpoint = "$baseUrl/api/auth/register"
             val payload = JSONObject().apply {
@@ -228,19 +230,46 @@ object PaymentApiClient {
             val (code, responseBody) = sendHttpRequest("POST", endpoint, payload.toString())
             if (code in 200..299) {
                 val json = JSONObject(responseBody)
-                val data = if (json.has("data")) json.getJSONObject("data") else json
-                val token = data.getString("token")
-                val userJson = data.getJSONObject("user")
-                val user = parseUser(userJson)
-                val expiresAt = data.optNullableString("expiresAt")
-                authToken = token
-                AuthResultData(token, user, expiresAt)
+                val data = if (json.has("data") && !json.isNull("data")) json.optJSONObject("data") ?: json else json
+                val challengeId = data.optString("challengeId", "").trim()
+                if (challengeId.isEmpty()) {
+                    if (data.has("token") || data.has("user")) {
+                        throw IllegalStateException("Hệ thống máy chủ chưa cập nhật phiên bản xác thực OTP (thiếu mã phiên challengeId). Vui lòng cập nhật backend trên Railway.")
+                    } else {
+                        throw IllegalStateException("Không nhận được mã phiên xác nhận (challengeId) từ máy chủ. Vui lòng thử lại sau.")
+                    }
+                }
+                challengeId
             } else {
                 val errorMsg = parseErrorMessage(responseBody, "Đăng ký thất bại (HTTP $code)")
                 throw IllegalStateException(errorMsg)
             }
         }
     }
+
+    suspend fun verifyRegistration(challengeId: String, code: String): Result<AuthResultData> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val payload = JSONObject().put("challengeId", challengeId).put("code", code)
+                val (status, body) = sendHttpRequest(
+                    "POST", "$baseUrl/api/auth/register/verify", payload.toString()
+                )
+                if (status !in 200..299) {
+                    throw IllegalStateException(parseErrorMessage(body, "Không thể xác nhận email (HTTP $status)"))
+                }
+                val root = JSONObject(body)
+                val data = if (root.has("data") && !root.isNull("data")) root.optJSONObject("data") ?: root else root
+                val token = data.optString("token", "").trim()
+                if (token.isEmpty()) {
+                    throw IllegalStateException("Phản hồi xác nhận thiếu mã xác thực (token).")
+                }
+                val userJson = data.optJSONObject("user")
+                    ?: throw IllegalStateException("Phản hồi xác nhận thiếu thông tin người dùng.")
+                val user = parseUser(userJson)
+                authToken = token
+                AuthResultData(token, user, data.optNullableString("expiresAt"))
+            }
+        }
 
     suspend fun getProfile(): Result<User> = withContext(Dispatchers.IO) {
         runCatching {
@@ -573,6 +602,8 @@ object PaymentApiClient {
             val imageResName = obj.optString("imageResName", "court_thanh_phat")
             val sportType = obj.optString("sportType", "Bóng đá")
             val indoor = obj.optBoolean("indoor", false)
+            val city = obj.optString("city").trim().takeUnless { obj.isNull("city") || it.isEmpty() }
+            val district = obj.optString("district").trim().takeUnless { obj.isNull("district") || it.isEmpty() }
 
             val lat = if (obj.has("latitude") && !obj.isNull("latitude")) obj.getDouble("latitude") else null
             val lng = if (obj.has("longitude") && !obj.isNull("longitude")) obj.getDouble("longitude") else null
@@ -623,11 +654,171 @@ object PaymentApiClient {
                     sportType = sportType,
                     indoor = indoor,
                     latitude = lat,
-                    longitude = lng
+                    longitude = lng,
+                    city = city,
+                    district = district
                 )
             )
         }
         result
+    }
+
+    // =========================================================================
+    // API TIN TỨC THỂ THAO (NEWS) TỪ RSS VNEXPRESS & TUỔI TRẺ
+    // =========================================================================
+
+    suspend fun getNews(): List<NewsItem> = withContext(Dispatchers.IO) {
+        val (code, respText) = sendHttpRequest(
+            method = "GET",
+            urlStr = "$baseUrl/api/news",
+            body = null
+        )
+        if (code !in 200..299) {
+            throw IllegalStateException(parseErrorMessage(respText, "Không thể tải tin tức thể thao từ máy chủ."))
+        }
+
+        val json = JSONObject(respText)
+        val dataArray = json.optJSONArray("data") ?: JSONArray()
+        val result = mutableListOf<NewsItem>()
+
+        for (i in 0 until dataArray.length()) {
+            val obj = dataArray.getJSONObject(i)
+            val title = obj.optString("title", "").trim()
+            val source = obj.optString("source", "").trim()
+            val publishedAt = obj.optString("publishedAt", "").trim()
+            val url = obj.optString("url", "").trim()
+            if (title.isNotEmpty() && url.isNotEmpty()) {
+                result.add(NewsItem(title, source, publishedAt, url))
+            }
+        }
+        result
+    }
+
+    // =========================================================================
+    // API GIẢI ĐẤU SẮP TỚI (TOURNAMENTS)
+    // =========================================================================
+
+    suspend fun getUpcomingTournaments(): List<TournamentItem> = withContext(Dispatchers.IO) {
+        val (code, respText) = sendHttpRequest(
+            method = "GET",
+            urlStr = "$baseUrl/api/tournaments/upcoming",
+            body = null
+        )
+        if (code !in 200..299) {
+            throw IllegalStateException(parseErrorMessage(respText, "Không thể tải danh sách giải đấu sắp tới."))
+        }
+
+        val json = JSONObject(respText)
+        val dataArray = json.optJSONArray("data") ?: JSONArray()
+        val result = mutableListOf<TournamentItem>()
+
+        for (i in 0 until dataArray.length()) {
+            val obj = dataArray.getJSONObject(i)
+            result.add(
+                TournamentItem(
+                    id = obj.optString("id", ""),
+                    title = obj.optString("title", ""),
+                    courtId = obj.optString("courtId", ""),
+                    courtName = obj.optString("courtName", ""),
+                    address = obj.optString("address", ""),
+                    startsAt = obj.optString("startsAt", ""),
+                    endsAt = obj.optString("endsAt", ""),
+                    maxTeams = obj.optInt("maxTeams", 0),
+                    isDemo = obj.optBoolean("isDemo", false)
+                )
+            )
+        }
+        result
+    }
+
+    // ── Notifications ────────────────────────────────────────────────────────
+
+    suspend fun getNotifications(): Result<List<com.example.easysport.ui.home.AppNotification>> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val (status, body) = sendHttpRequest("GET", "$baseUrl/api/notifications", null)
+                when (status) {
+                    in 200..299 -> {
+                        val root = JSONObject(body)
+                        val arr = root.optJSONArray("data") ?: return@runCatching emptyList()
+                        val result = mutableListOf<com.example.easysport.ui.home.AppNotification>()
+                        for (i in 0 until arr.length()) {
+                            val obj = arr.getJSONObject(i)
+                            result.add(parseNotification(obj))
+                        }
+                        result
+                    }
+                    401 -> throw IllegalStateException("Phiên đăng nhập đã hết hạn. Vui lòng đăng nhập lại.")
+                    403 -> throw IllegalStateException("Bạn không có quyền truy cập thông báo này.")
+                    404 -> throw IllegalStateException("Máy chủ backend chưa cập nhật tính năng thông báo (404 Not Found). Vui lòng cập nhật backend trên Railway.")
+                    else -> throw IllegalStateException(parseErrorMessage(body, "Lỗi tải thông báo ($status)."))
+                }
+            }
+        }
+
+    suspend fun markNotificationRead(id: String): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            val (status, body) = sendHttpRequest("PUT", "$baseUrl/api/notifications/$id/read", null)
+            if (status !in 200..299) {
+                throw IllegalStateException(parseErrorMessage(body, "Không thể đánh dấu đã đọc ($status)."))
+            }
+        }
+    }
+
+    suspend fun markAllNotificationsRead(): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            val (status, body) = sendHttpRequest("PUT", "$baseUrl/api/notifications/read-all", null)
+            if (status !in 200..299) {
+                throw IllegalStateException(parseErrorMessage(body, "Không thể đánh dấu tất cả đã đọc ($status)."))
+            }
+        }
+    }
+
+    suspend fun getUnreadNotificationCount(): Result<Int> = withContext(Dispatchers.IO) {
+        runCatching {
+            val (status, body) = sendHttpRequest("GET", "$baseUrl/api/notifications/unread-count", null)
+            if (status !in 200..299) return@runCatching 0
+            val root = JSONObject(body)
+            root.optInt("data", 0)
+        }
+    }
+
+    private fun parseNotification(obj: org.json.JSONObject): com.example.easysport.ui.home.AppNotification {
+        val type = when (obj.optString("type", "SYSTEM")) {
+            "BOOKING_CONFIRMED" -> com.example.easysport.ui.home.NotificationType.BOOKING
+            "PAYMENT_RECEIVED"  -> com.example.easysport.ui.home.NotificationType.PAYMENT
+            "REMINDER_2H"       -> com.example.easysport.ui.home.NotificationType.REMINDER
+            "SYSTEM"            -> com.example.easysport.ui.home.NotificationType.SYSTEM
+            else                -> com.example.easysport.ui.home.NotificationType.SYSTEM
+        }
+        val createdAt = obj.optString("createdAt", "")
+        return com.example.easysport.ui.home.AppNotification(
+            id = obj.optString("id", ""),
+            title = obj.optString("title", ""),
+            body = obj.optString("body", ""),
+            createdAt = createdAt,
+            timeAgo = formatTimeAgo(createdAt),
+            type = type,
+            isRead = obj.optBoolean("read", false),
+            targetBookingId = obj.optString("bookingId", "").ifBlank { null }
+        )
+    }
+
+    private fun formatTimeAgo(isoDateTime: String): String {
+        if (isoDateTime.isBlank()) return ""
+        return try {
+            val created = java.time.LocalDateTime.parse(isoDateTime)
+            val now = java.time.LocalDateTime.now()
+            val minutes = java.time.Duration.between(created, now).toMinutes()
+            when {
+                minutes < 1   -> "Vừa xong"
+                minutes < 60  -> "${minutes} phút trước"
+                minutes < 1440 -> "${minutes / 60} giờ trước"
+                else          -> "${minutes / 1440} ngày trước"
+            }
+        } catch (_: Exception) {
+            isoDateTime
+        }
     }
 
     private fun sendHttpRequest(

@@ -8,7 +8,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.easysport.data.model.User
 
 /**
- * Luồng đăng ký 2 bước. onComplete nhận user đã tạo thành công.
+ * Luồng đăng ký và xác minh email. onComplete nhận user đã tạo thành công.
  */
 @Composable
 fun SignUpRoute(
@@ -20,7 +20,7 @@ fun SignUpRoute(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
 
-    BackHandler(enabled = state.step == 2) { viewModel.back() }
+    BackHandler(enabled = state.step >= 2) { viewModel.back() }
     BackHandler(enabled = state.step == 1) {
         viewModel.reset()
         onSignIn()
@@ -37,7 +37,7 @@ fun SignUpRoute(
                 onSignIn()
             },
         )
-        else -> SignUpPasswordScreen(
+        2 -> SignUpPasswordScreen(
             form = state.form,
             errors = state.errors,
             onFormChange = viewModel::onFormChange,
@@ -47,6 +47,15 @@ fun SignUpRoute(
             onPrivacy = onPrivacy,
             isLoading = state.isLoading,
             submitError = state.submitError,
+        )
+        3 -> SignUpVerificationScreen(
+            challengeId = requireNotNull(state.challengeId),
+            email = state.form.email.trim(),
+            isLoading = state.isLoading,
+            error = state.submitError,
+            onVerify = { code -> viewModel.verify(code, onComplete) },
+            onResend = { viewModel.complete(onComplete) },
+            onBack = viewModel::back,
         )
     }
 }

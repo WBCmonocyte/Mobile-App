@@ -61,6 +61,11 @@ class LoginViewModel(
                             it.copy(isLoading = false, loggedInUser = result.user)
                         }
                     }
+                    is AuthResult.VerificationRequired -> {
+                        _uiState.update {
+                            it.copy(isLoading = false, errorMessage = "Vui lòng xác nhận email.")
+                        }
+                    }
                     is AuthResult.Error -> {
                         _uiState.update {
                             it.copy(isLoading = false, errorMessage = result.message)

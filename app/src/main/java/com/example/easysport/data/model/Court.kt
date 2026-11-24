@@ -36,6 +36,8 @@ data class Court(
     val indoor: Boolean = false,
     val latitude: Double? = null,
     val longitude: Double? = null,
+    val city: String? = null,
+    val district: String? = null,
 )
 
 enum class SlotAvailabilityStatus {

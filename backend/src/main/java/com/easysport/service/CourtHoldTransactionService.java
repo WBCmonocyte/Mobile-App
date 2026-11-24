@@ -1,5 +1,6 @@
 package com.easysport.service;
 
+import com.easysport.controller.StaffController;
 import com.easysport.dto.ConflictSlotDto;
 import com.easysport.dto.SlotConflictException;
 import com.easysport.dto.StartCheckoutRequest;
@@ -10,6 +11,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -133,6 +135,36 @@ public class CourtHoldTransactionService {
             if (!activeConflicts.isEmpty()) {
                 for (CourtHoldSlot s : activeConflicts) {
                     conflicts.add(new ConflictSlotDto(interval.originalLabel, s.getStatus(), s.getExpiresAt()));
+                }
+            }
+        }
+
+        // Kiểm tra đối ứng với các đơn đặt sân tại quầy hoặc đã thanh toán trong bookingRepository
+        if (bookingRepository != null) {
+            List<Booking> activeBookings = bookingRepository.findAllByOrderByCreatedAtDesc();
+            if (activeBookings != null) {
+                for (Booking b : activeBookings) {
+                    if (!court.getId().equals(b.getCourtId())) continue;
+                    String st = b.getStatus() != null ? b.getStatus().toUpperCase() : "";
+                    if (!st.equals("PAID") && !st.equals("DEPOSIT_PAID") && !st.equals("CHECKED_IN")) continue;
+                    String bDate = StaffController.extractDate(b.getDateLabel());
+                    if (bDate == null && b.getDateLabel() != null) {
+                        bDate = b.getDateLabel().trim();
+                    }
+                    if (!req.getDateLabel().trim().equals(bDate)) continue;
+                    boolean overlaps = StaffController.subFieldsOverlap(field.getDetail(), b.getFieldDetail())
+                            || StaffController.subFieldsOverlap(field.getLabel(), b.getFieldDetail())
+                            || StaffController.subFieldsOverlap(field.getId(), b.getFieldDetail());
+                    if (!overlaps) continue;
+                    LocalTime[] bTimes = StaffController.extractTimeInterval(b.getTimeRange());
+                    if (bTimes == null) continue;
+                    int bStart = bTimes[0].getHour() * 60 + bTimes[0].getMinute();
+                    int bEnd = bTimes[1].getHour() * 60 + bTimes[1].getMinute();
+                    for (CourtHoldService.SlotInterval interval : requestedIntervals) {
+                        if (interval.startMinute < bEnd && bStart < interval.endMinute) {
+                            conflicts.add(new ConflictSlotDto(interval.originalLabel, "BOOKED", null));
+                        }
+                    }
                 }
             }
         }

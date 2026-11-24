@@ -8,6 +8,8 @@ import com.example.easysport.data.repository.AuthRepository
 import com.example.easysport.data.repository.AuthResult
 import com.example.easysport.data.repository.NetworkAuthRepository
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -44,6 +46,7 @@ data class SignUpUiState(
     val errors: SignUpErrors = SignUpErrors(),
     val isLoading: Boolean = false,
     val submitError: String? = null,
+    val challengeId: String? = null,
 )
 
 private val EMAIL_RE = Regex("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$")
@@ -51,6 +54,7 @@ private val PHONE_RE = Regex("^(\\+84|0)\\d{9,10}$")
 
 class SignUpViewModel(
     private val authRepository: AuthRepository = NetworkAuthRepository.instance,
+    private val dispatcher: CoroutineDispatcher = Dispatchers.Main,
 ) : ViewModel() {
 
     private val _state = MutableStateFlow(SignUpUiState())
@@ -94,7 +98,11 @@ class SignUpViewModel(
         if (errors.hasDetailsErrors) s.copy(errors = errors) else s.copy(step = 2, errors = SignUpErrors())
     }
 
-    fun back() = _state.update { it.copy(step = 1, errors = SignUpErrors(), submitError = null) }
+    fun back() = _state.update {
+        if (it.isLoading) it else it.copy(
+            step = if (it.step == 3) 2 else 1, errors = SignUpErrors(), submitError = null,
+        )
+    }
 
     fun reset() {
         _state.value = SignUpUiState()
@@ -106,8 +114,8 @@ class SignUpViewModel(
 
         val f = current.form
         val errors = SignUpErrors(
-            password = if (f.password.length < 8 || f.password.none { it.isDigit() })
-                "Mật khẩu cần ít nhất 8 ký tự và có một chữ số." else null,
+            password = if (f.password.length !in 8..128 || f.password.none { it in '0'..'9' })
+                "Mật khẩu cần từ 8 đến 128 ký tự và có ít nhất một chữ số." else null,
             confirmPassword = if (f.confirmPassword != f.password) "Mật khẩu xác nhận không khớp." else null,
         )
         if (errors.hasPasswordErrors) {
@@ -120,37 +128,39 @@ class SignUpViewModel(
             return
         }
 
-        _state.update { it.copy(isLoading = true, errors = SignUpErrors(), submitError = null) }
+        submit(onSuccess) {
+            authRepository.register(f.fullName, dob, f.phone, f.email, f.address, f.password)
+        }
+    }
 
-        viewModelScope.launch {
+    fun verify(code: String, onSuccess: (User) -> Unit) {
+        val challenge = _state.value.challengeId ?: return
+        if (code.length != 6 || code.any { it !in '0'..'9' }) return
+        submit(onSuccess) { authRepository.verifyRegistration(challenge, code) }
+    }
+
+    private fun submit(onSuccess: (User) -> Unit, action: suspend () -> AuthResult) {
+        if (_state.value.isLoading) return
+        _state.update { it.copy(isLoading = true, errors = SignUpErrors(), submitError = null) }
+        viewModelScope.launch(dispatcher) {
             try {
-                when (val result = authRepository.register(
-                    fullName = f.fullName,
-                    dateOfBirth = dob,
-                    phone = f.phone,
-                    email = f.email,
-                    address = f.address,
-                    password = f.password,
-                )) {
-                    is AuthResult.Success -> {
-                        _state.update { it.copy(isLoading = false) }
-                        onSuccess(result.user)
-                        reset()
+                when (val result = action()) {
+                    is AuthResult.VerificationRequired -> _state.update {
+                        it.copy(step = 3, challengeId = result.challengeId, isLoading = false)
                     }
-                    is AuthResult.Error -> {
-                        _state.update {
-                            it.copy(isLoading = false, submitError = result.message)
-                        }
+                    is AuthResult.Success -> {
+                        reset()
+                        onSuccess(result.user)
+                    }
+                    is AuthResult.Error -> _state.update {
+                        it.copy(isLoading = false, submitError = result.message)
                     }
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 _state.update {
-                    it.copy(
-                        isLoading = false,
-                        submitError = e.message ?: "Đăng ký thất bại. Vui lòng thử lại.",
-                    )
+                    it.copy(isLoading = false, submitError = e.message ?: "Đăng ký thất bại. Vui lòng thử lại.")
                 }
             }
         }
