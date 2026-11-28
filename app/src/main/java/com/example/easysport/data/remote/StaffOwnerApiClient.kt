@@ -23,6 +23,7 @@ import com.example.easysport.data.model.ShiftReportItem
 import com.example.easysport.data.model.ShiftTemplate
 import com.example.easysport.data.model.StaffBookingItem
 import com.example.easysport.data.model.StaffMemberOption
+import com.example.easysport.data.model.StaffQrCheckoutSession
 import com.example.easysport.data.model.StaffShiftItem
 import com.example.easysport.data.model.StaffShiftSummary
 import com.example.easysport.data.model.StaffWorkload
@@ -194,6 +195,41 @@ object StaffOwnerApiClient {
             )
         }
     }
+
+    suspend fun createStaffQrCheckout(
+        amount: Int,
+        description: String,
+        referenceId: String? = null,
+    ): Result<StaffQrCheckoutSession> = withContext(Dispatchers.IO) {
+        runCatching {
+            val payload = JSONObject().apply {
+                put("amount", amount)
+                put("description", description)
+                if (!referenceId.isNullOrBlank()) put("referenceId", referenceId)
+            }
+            val (code, body) = send("POST", "${baseUrl()}/api/staff/qr/checkout", payload.toString())
+            parseStaffQrSession(extractDataObject(code, body, "Không thể tạo phiên thanh toán SePay QR"))
+        }
+    }
+
+    suspend fun getStaffQrStatus(paymentId: String): Result<StaffQrCheckoutSession> = withContext(Dispatchers.IO) {
+        runCatching {
+            val (code, body) = send("GET", "${baseUrl()}/api/staff/qr/$paymentId/status", null)
+            parseStaffQrSession(extractDataObject(code, body, "Không thể kiểm tra trạng thái thanh toán QR"))
+        }
+    }
+
+    private fun parseStaffQrSession(o: JSONObject): StaffQrCheckoutSession = StaffQrCheckoutSession(
+        paymentId = o.optString("paymentId", ""),
+        orderInvoiceNumber = o.optString("orderInvoiceNumber", ""),
+        checkoutUrl = o.optString("checkoutUrl", ""),
+        amount = o.optInt("amount", 0),
+        status = o.optString("status", "PENDING"),
+        isPaid = o.optBoolean("isPaid", false),
+        isExpired = o.optBoolean("isExpired", false),
+        expiresAt = o.optString("expiresAt", "").takeIf { it.isNotBlank() && it != "null" },
+        serverNow = o.optString("serverNow", "").takeIf { it.isNotBlank() && it != "null" },
+    )
 
     suspend fun getMyShifts(): Result<List<StaffShiftItem>> = withContext(Dispatchers.IO) {
         runCatching {

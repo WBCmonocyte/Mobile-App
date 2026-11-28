@@ -305,6 +305,148 @@ public class SepayService {
                 "</html>";
     }
 
+    public static boolean isStaffCounterPayment(Payment payment) {
+        return payment != null && payment.getId() != null && payment.getId().startsWith("pay_staff_");
+    }
+
+    /**
+     * Render trang Checkout SePay (Sandbox hoặc Demo) cho giao dịch QR tại quầy của Nhân viên
+     */
+    public String renderStaffCheckoutHtml(Payment payment) {
+        String description = (payment.getRawIpnData() != null && !payment.getRawIpnData().isBlank())
+                ? payment.getRawIpnData()
+                : "Thanh toan tai quay EasySport";
+        if (!sepayConfig.isConfigured()) {
+            return renderStaffDemoCheckoutHtml(payment, description);
+        }
+
+        String publicUrl = sepayConfig.getAppPublicUrl();
+        Map<String, String> fields = new LinkedHashMap<>();
+        fields.put("order_amount", String.valueOf(payment.getAmount()));
+        fields.put("merchant", sepayConfig.getMerchantId());
+        fields.put("currency", payment.getCurrency());
+        fields.put("operation", "PURCHASE");
+        fields.put("order_description", ("EasySport POS: " + description).replaceAll("[\\r\\n]+", " ").strip());
+        fields.put("order_invoice_number", payment.getOrderInvoiceNumber());
+        fields.put("success_url", publicUrl + "/payments/callback/success?invoice=" + payment.getOrderInvoiceNumber());
+        fields.put("error_url", publicUrl + "/payments/callback/error?invoice=" + payment.getOrderInvoiceNumber());
+        fields.put("cancel_url", publicUrl + "/payments/callback/cancel?invoice=" + payment.getOrderInvoiceNumber());
+
+        String signature = generateSignature(fields, sepayConfig.getSecretKey());
+        fields.put("signature", signature);
+
+        StringBuilder formInputs = new StringBuilder();
+        for (Map.Entry<String, String> entry : fields.entrySet()) {
+            formInputs.append(String.format("        <input type=\"hidden\" name=\"%s\" value=\"%s\" />\n",
+                    escapeHtml(entry.getKey()), escapeHtml(entry.getValue())));
+        }
+
+        return "<!DOCTYPE html>\n" +
+                "<html lang=\"vi\">\n" +
+                "<head>\n" +
+                "    <meta charset=\"UTF-8\">\n" +
+                "    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n" +
+                "    <title>Chuyển hướng đến SePay Sandbox...</title>\n" +
+                "    <style>\n" +
+                "        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; " +
+                "               background: #F4F7FB; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }\n" +
+                "        .card { background: white; padding: 32px; border-radius: 20px; box-shadow: 0 8px 30px rgba(0,0,0,0.06); text-align: center; max-width: 420px; width: 90%; }\n" +
+                "        .spinner { border: 4px solid #EBF2FA; border-top: 4px solid #3B6698; border-radius: 50%; width: 44px; height: 44px; animation: spin 1s linear infinite; margin: 0 auto 20px; }\n" +
+                "        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }\n" +
+                "        h2 { color: #1A2E46; margin: 0 0 8px; font-size: 20px; }\n" +
+                "        p { color: #748398; font-size: 14px; line-height: 1.5; margin: 0 0 20px; }\n" +
+                "        .btn { background: #3B6698; color: white; border: none; padding: 12px 24px; border-radius: 12px; font-weight: 600; cursor: pointer; text-decoration: none; display: inline-block; }\n" +
+                "    </style>\n" +
+                "</head>\n" +
+                "<body>\n" +
+                "    <div class=\"card\">\n" +
+                "        <div class=\"spinner\"></div>\n" +
+                "        <h2>Đang kết nối SePay Sandbox</h2>\n" +
+                "        <p>Vui lòng đợi giây lát để chuyển tiếp đến cổng thanh toán VietQR tại quầy...</p>\n" +
+                "        <form id=\"sepayForm\" action=\"" + escapeHtml(sepayConfig.getCheckoutUrl()) + "\" method=\"POST\">\n" +
+                formInputs +
+                "            <button type=\"submit\" class=\"btn\">Nhấn vào đây nếu không tự chuyển</button>\n" +
+                "        </form>\n" +
+                "    </div>\n" +
+                "    <script>\n" +
+                "        setTimeout(function() { document.getElementById('sepayForm').submit(); }, 600);\n" +
+                "    </script>\n" +
+                "</body>\n" +
+                "</html>";
+    }
+
+    public String renderStaffDemoCheckoutHtml(Payment payment, String description) {
+        String amountVnd = String.format("%,d VNĐ", payment.getAmount());
+        String invoice = escapeHtml(payment.getOrderInvoiceNumber());
+        String desc = escapeHtml(description);
+        String token = escapeHtml(payment.getCheckoutToken());
+        String encodedInfo = java.net.URLEncoder.encode(payment.getOrderInvoiceNumber(), StandardCharsets.UTF_8);
+        String encodedName = java.net.URLEncoder.encode("SAN BONG EASYSPORT", StandardCharsets.UTF_8);
+        String vietQrUrl = "https://img.vietqr.io/image/MB-0987654321-compact2.png?amount="
+                + payment.getAmount() + "&addInfo=" + encodedInfo + "&accountName=" + encodedName;
+
+        return "<!DOCTYPE html>\n" +
+                "<html lang=\"vi\">\n" +
+                "<head>\n" +
+                "    <meta charset=\"UTF-8\">\n" +
+                "    <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n" +
+                "    <title>Cổng Thanh Toán Quầy Thu Ngân EasySport</title>\n" +
+                "    <style>\n" +
+                "        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #F4F7FB; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 16px; box-sizing: border-box; }\n" +
+                "        .card { background: white; padding: 24px 20px; border-radius: 20px; box-shadow: 0 8px 30px rgba(0,0,0,0.08); max-width: 440px; width: 100%; box-sizing: border-box; text-align: center; }\n" +
+                "        .badge { display: inline-block; background: #E8F5E9; color: #2E7D32; font-size: 12px; font-weight: 700; padding: 4px 12px; border-radius: 20px; margin-bottom: 10px; }\n" +
+                "        h2 { color: #1A2E46; margin: 0 0 4px; font-size: 20px; }\n" +
+                "        .amount { font-size: 26px; font-weight: 800; color: #1E8E3E; margin: 8px 0 14px; }\n" +
+                "        .qr-wrap { background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 16px; padding: 12px; margin: 0 auto 16px; display: inline-block; }\n" +
+                "        .qr-wrap img { width: 220px; height: 220px; object-fit: contain; display: block; border-radius: 8px; }\n" +
+                "        .info-box { background: #F8FAFC; border: 1px solid #E2E8F0; border-radius: 12px; padding: 12px 14px; text-align: left; margin-bottom: 16px; font-size: 13.5px; line-height: 1.75; color: #334155; }\n" +
+                "        .info-row { display: flex; justify-content: space-between; gap: 12px; }\n" +
+                "        .info-label { color: #64748B; white-space: nowrap; }\n" +
+                "        .info-val { font-weight: 600; color: #0F172A; text-align: right; }\n" +
+                "        .btn { background: #1E8E3E; color: white; border: none; padding: 14px 20px; border-radius: 12px; font-weight: 700; width: 100%; font-size: 15px; cursor: pointer; transition: background 0.2s; box-shadow: 0 4px 12px rgba(30,142,62,0.25); }\n" +
+                "        .btn:hover { background: #166534; }\n" +
+                "        .note { margin-top: 12px; font-size: 12px; color: #94A3B8; }\n" +
+                "    </style>\n" +
+                "</head>\n" +
+                "<body>\n" +
+                "    <div class=\"card\">\n" +
+                "        <div class=\"badge\">SEPAY POS · VIETQR THANH TOÁN</div>\n" +
+                "        <h2>EasySport Counter QR</h2>\n" +
+                "        <div class=\"amount\">" + amountVnd + "</div>\n" +
+                "        <div class=\"qr-wrap\">\n" +
+                "            <img src=\"" + escapeHtml(vietQrUrl) + "\" alt=\"Mã VietQR SePay\" />\n" +
+                "        </div>\n" +
+                "        <div class=\"info-box\">\n" +
+                "            <div class=\"info-row\"><span class=\"info-label\">Ngân hàng:</span><span class=\"info-val\">MB Bank · 0987654321</span></div>\n" +
+                "            <div class=\"info-row\"><span class=\"info-label\">Mã hóa đơn:</span><span class=\"info-val\">" + invoice + "</span></div>\n" +
+                "            <div class=\"info-row\"><span class=\"info-label\">Nội dung:</span><span class=\"info-val\">" + desc + "</span></div>\n" +
+                "        </div>\n" +
+                "        <form method=\"POST\" action=\"/payments/" + token + "/mock-confirm\">\n" +
+                "            <button type=\"submit\" class=\"btn\">✓ Xác nhận đã thanh toán thành công</button>\n" +
+                "        </form>\n" +
+                "        <div class=\"note\">Quét mã VietQR trên bằng app ngân hàng hoặc nhấn xác nhận demo để tự động đồng bộ về màn hình Thu ngân EasySport.</div>\n" +
+                "    </div>\n" +
+                "</body>\n" +
+                "</html>";
+    }
+
+    @Transactional(isolation = org.springframework.transaction.annotation.Isolation.READ_COMMITTED)
+    public boolean confirmStaffMockPayment(Payment payment) {
+        LocalDateTime now = LocalDateTime.now(clock);
+        Payment lockedPayment = paymentRepository.lockById(payment.getId()).orElseThrow();
+        if ("PAID".equalsIgnoreCase(lockedPayment.getStatus())) return true;
+        if (!"PENDING".equalsIgnoreCase(lockedPayment.getStatus())
+                || (lockedPayment.getExpiresAt() != null && now.isAfter(lockedPayment.getExpiresAt()))) {
+            return false;
+        }
+        lockedPayment.setStatus("PAID");
+        lockedPayment.setConfirmedAmount(lockedPayment.getAmount());
+        lockedPayment.setConfirmedAt(now);
+        lockedPayment.setSepayTransactionId("MOCK_STAFF_" + UUID.randomUUID().toString().substring(0, 8));
+        paymentRepository.save(lockedPayment);
+        return true;
+    }
+
     /**
      * Xác nhận thanh toán thành công trực tiếp cho chế độ Demo / Mock test
      */
@@ -381,6 +523,28 @@ public class SepayService {
         if (invoice.isBlank() || txnId.isBlank() || txnId.length() > 100) return rejectIpn("invalid_identifiers");
         Payment snapshot = paymentRepository.findByOrderInvoiceNumber(invoice).orElse(null);
         if (snapshot == null) return rejectIpn("unknown_invoice");
+        if (isStaffCounterPayment(snapshot)) {
+            Payment payment = paymentRepository.lockById(snapshot.getId()).orElseThrow();
+            int orderAmount = parseAmount(order.get("order_amount"));
+            int received = parseAmount(txn.get("transaction_amount"));
+            if (!"VND".equals(order.get("order_currency")) || !"VND".equals(txn.get("transaction_currency"))
+                    || orderAmount != payment.getAmount() || received != payment.getAmount()) {
+                return rejectIpn("amount_or_currency_mismatch");
+            }
+            if (payment.getSepayTransactionId() != null) {
+                return txnId.equals(payment.getSepayTransactionId()) || rejectIpn("different_transaction_for_paid_invoice");
+            }
+            if (paymentRepository.existsBySepayTransactionId(txnId)) return rejectIpn("transaction_already_used");
+            LocalDateTime now = LocalDateTime.now(clock);
+            boolean valid = "PENDING".equalsIgnoreCase(payment.getStatus())
+                    && (payment.getExpiresAt() == null || now.isBefore(payment.getExpiresAt().plusMinutes(1)));
+            payment.setConfirmedAmount(received);
+            payment.setConfirmedAt(now);
+            payment.setSepayTransactionId(txnId);
+            payment.setStatus(valid ? "PAID" : "REVIEW_REQUIRED");
+            paymentRepository.save(payment);
+            return true;
+        }
         Booking booking = bookingRepository.findById(snapshot.getBookingId()).orElse(null);
         if (booking == null) return rejectIpn("booking_not_found");
         // All reservation writers take the same court lock BEFORE the hold/payment locks.

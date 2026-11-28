@@ -7,6 +7,7 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -35,6 +36,7 @@ import androidx.compose.material.icons.rounded.BarChart
 import androidx.compose.material.icons.rounded.ChevronLeft
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.DateRange
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Directions
 import androidx.compose.material.icons.rounded.Edit
@@ -69,6 +71,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
@@ -115,6 +118,7 @@ import com.example.easysport.ui.staff.StatusBadge
 import kotlinx.coroutines.launch
 import java.time.DayOfWeek
 import java.time.LocalDate
+import java.time.YearMonth
 import java.time.format.DateTimeFormatter
 import java.time.temporal.TemporalAdjusters
 
@@ -250,9 +254,10 @@ fun OwnerDashboardScreen(
     Scaffold(
         containerColor = ProColors.Canvas,
         topBar = {
+            val ownerName = currentUser?.name?.takeIf { it.isNotBlank() } ?: "Chủ sân EasySport"
             ProTopBar(
-                title = currentScreen.title,
-                subtitle = currentUser?.name ?: "Chủ sân EasySport",
+                title = if (currentScreen == OwnerScreen.HOME) ownerName else currentScreen.title,
+                subtitle = if (currentScreen == OwnerScreen.HOME) "Chủ sân" else "$ownerName · Chủ sân",
                 roleBadge = "CHỦ SÂN",
                 isRefreshing = isRefreshing,
                 onRefresh = { refreshAll() },
@@ -335,6 +340,7 @@ fun OwnerDashboardScreen(
                 )
                 OwnerScreen.SHIFTS -> OwnerShiftsTab(
                     schedule = schedule,
+                    allShifts = shifts,
                     courts = courts,
                     selectedBranchId = selectedBranchId,
                     onSelectBranch = { branchId ->
@@ -1276,12 +1282,15 @@ private fun OwnerHubTile(
         border = BorderStroke(1.dp, ProColors.Border),
         shadowElevation = 2.dp,
         modifier = modifier
+            .height(144.dp)
             .clip(RoundedCornerShape(20.dp))
             .clickable(onClick = onClick)
     ) {
         Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(15.dp),
+            verticalArrangement = Arrangement.SpaceBetween
         ) {
             Row(
                 Modifier.fillMaxWidth(),
@@ -1290,8 +1299,8 @@ private fun OwnerHubTile(
             ) {
                 Box(
                     modifier = Modifier
-                        .size(50.dp)
-                        .clip(RoundedCornerShape(15.dp))
+                        .size(48.dp)
+                        .clip(RoundedCornerShape(14.dp))
                         .background(option.iconBg),
                     contentAlignment = Alignment.Center
                 ) {
@@ -1299,7 +1308,7 @@ private fun OwnerHubTile(
                         imageVector = option.icon,
                         contentDescription = option.title,
                         tint = option.iconColor,
-                        modifier = Modifier.size(27.dp)
+                        modifier = Modifier.size(26.dp)
                     )
                 }
                 if (option.badgeCount > 0) {
@@ -1321,7 +1330,7 @@ private fun OwnerHubTile(
                 Text(
                     text = option.title,
                     fontWeight = FontWeight.Bold,
-                    fontSize = 15.sp,
+                    fontSize = 14.5.sp,
                     color = ProColors.Ink,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
@@ -1331,6 +1340,7 @@ private fun OwnerHubTile(
                     fontSize = 12.sp,
                     color = ProColors.Muted,
                     maxLines = 2,
+                    minLines = 2,
                     overflow = TextOverflow.Ellipsis,
                     lineHeight = 16.sp
                 )
@@ -1432,6 +1442,7 @@ private fun OwnerBookingsScreen(overview: OwnerOverviewData?) {
 @Composable
 private fun OwnerShiftsTab(
     schedule: OwnerWeekSchedule?,
+    allShifts: List<StaffShiftItem> = emptyList(),
     courts: List<Court>,
     selectedBranchId: String?,
     onSelectBranch: (String?) -> Unit,
@@ -1636,45 +1647,266 @@ private fun OwnerShiftsTab(
             }
         }
 
-        // d. Chế độ Lịch bấm / Cả tuần
+        // d. Chế độ Lịch bấm / Cả tuần / Lịch tháng (đồng bộ với Client)
         item {
-            var calendarMode by remember { mutableStateOf(true) }
+            var viewMode by remember { mutableStateOf("DAY") } // "DAY", "WEEK", "MONTH"
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                EsSegmentedControl(
-                    leftLabel = "Lịch bấm từng ngày",
-                    rightLabel = "Xem cả tuần (7 ngày)",
-                    isLeftSelected = calendarMode,
-                    onSelectLeft = { calendarMode = true },
-                    onSelectRight = { calendarMode = false },
-                )
-                if (calendarMode && schedule.days.isNotEmpty()) {
-                    val todayFmt = remember { LocalDate.now().format(DateTimeFormatter.ofPattern("dd/MM/yyyy")) }
-                    var selectedDate by remember(schedule.weekStart) {
-                        mutableStateOf(
-                            schedule.days.firstOrNull { it.date == todayFmt }?.date
-                                ?: schedule.days.firstOrNull { !it.isPast }?.date
-                                ?: schedule.days.first().date
-                        )
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(ProColors.Surface)
+                        .padding(3.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    listOf("DAY" to "Theo ngày", "WEEK" to "Cả tuần", "MONTH" to "Lịch tháng").forEach { (key, label) ->
+                        val active = viewMode == key
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(if (active) ProColors.Primary else Color.Transparent)
+                                .clickable { viewMode = key }
+                                .padding(vertical = 8.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = label,
+                                fontSize = 12.5.sp,
+                                fontWeight = if (active) FontWeight.Bold else FontWeight.Medium,
+                                color = if (active) Color.White else ProColors.SubInk
+                            )
+                        }
                     }
-                    InteractiveWeekCalendarStrip(
-                        days = schedule.days,
-                        selectedDate = selectedDate,
-                        onSelectDate = { selectedDate = it }
-                    )
-                    val selectedDay = schedule.days.firstOrNull { it.date == selectedDate } ?: schedule.days.first()
-                    DayScheduleCard(
-                        day = selectedDay,
-                        onSlotClick = onSlotClick,
-                        onDeleteShift = onDeleteShift
-                    )
-                } else {
-                    ProSectionHeader("Lịch trực 7 ngày")
-                    schedule.days.forEach { day ->
+                }
+                when (viewMode) {
+                    "DAY" -> if (schedule.days.isNotEmpty()) {
+                        val todayFmt = remember { LocalDate.now().format(DateTimeFormatter.ofPattern("dd/MM/yyyy")) }
+                        var selectedDate by remember(schedule.weekStart) {
+                            mutableStateOf(
+                                schedule.days.firstOrNull { it.date == todayFmt }?.date
+                                    ?: schedule.days.firstOrNull { !it.isPast }?.date
+                                    ?: schedule.days.first().date
+                            )
+                        }
+                        InteractiveWeekCalendarStrip(
+                            days = schedule.days,
+                            selectedDate = selectedDate,
+                            onSelectDate = { selectedDate = it }
+                        )
+                        val selectedDay = schedule.days.firstOrNull { it.date == selectedDate } ?: schedule.days.first()
                         DayScheduleCard(
-                            day = day,
+                            day = selectedDay,
                             onSlotClick = onSlotClick,
                             onDeleteShift = onDeleteShift
                         )
+                    }
+                    "WEEK" -> {
+                        ProSectionHeader("Lịch trực 7 ngày")
+                        schedule.days.forEach { day ->
+                            DayScheduleCard(
+                                day = day,
+                                onSlotClick = onSlotClick,
+                                onDeleteShift = onDeleteShift
+                            )
+                        }
+                    }
+                    else -> {
+                        val branchShifts = remember(allShifts, selectedBranchId) {
+                            if (selectedBranchId.isNullOrBlank()) allShifts
+                            else allShifts.filter { it.courtId == selectedBranchId }
+                        }
+                        OwnerMonthCalendarSection(
+                            shifts = branchShifts,
+                            onAssignForDate = { dateStr -> onSlotClick(dateStr, "Ca Sáng (06:00 - 12:00)") },
+                            onDeleteShift = onDeleteShift
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun OwnerMonthCalendarSection(
+    shifts: List<StaffShiftItem>,
+    onAssignForDate: (String) -> Unit,
+    onDeleteShift: (StaffShiftItem) -> Unit,
+) {
+    val dateFmt = remember { DateTimeFormatter.ofPattern("dd/MM/yyyy") }
+    val today = remember { LocalDate.now() }
+    val todayStr = remember(today) { today.format(dateFmt) }
+    var currentYearMonth by remember { mutableStateOf(YearMonth.from(today)) }
+    var selectedDate by remember { mutableStateOf(todayStr) }
+
+    val shiftsByDate = remember(shifts) { shifts.groupBy { it.shiftDate } }
+    val selectedDayShifts = shiftsByDate[selectedDate].orEmpty()
+
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        ProCard {
+            Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(
+                            text = "Tháng ${currentYearMonth.monthValue}, ${currentYearMonth.year}",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 15.sp,
+                            color = ProColors.Ink
+                        )
+                        if (currentYearMonth == YearMonth.now()) {
+                            ProStatusDotPill(
+                                text = "Tháng này",
+                                dotColor = ProColors.Primary,
+                                textColor = ProColors.Primary,
+                                bgColor = ProColors.PrimarySoft
+                            )
+                        }
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(onClick = { currentYearMonth = currentYearMonth.minusMonths(1) }, modifier = Modifier.size(32.dp)) {
+                            Icon(Icons.Rounded.ChevronLeft, contentDescription = "Tháng trước", tint = ProColors.SubInk, modifier = Modifier.size(20.dp))
+                        }
+                        if (currentYearMonth != YearMonth.now()) {
+                            TextButton(
+                                onClick = {
+                                    currentYearMonth = YearMonth.now()
+                                    selectedDate = todayStr
+                                },
+                                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)
+                            ) {
+                                Text("Hôm nay", fontSize = 11.5.sp, color = ProColors.Primary)
+                            }
+                        }
+                        IconButton(onClick = { currentYearMonth = currentYearMonth.plusMonths(1) }, modifier = Modifier.size(32.dp)) {
+                            Icon(Icons.Rounded.ChevronRight, contentDescription = "Tháng sau", tint = ProColors.SubInk, modifier = Modifier.size(20.dp))
+                        }
+                    }
+                }
+
+                // Header T2..CN
+                Row(Modifier.fillMaxWidth()) {
+                    listOf("T2", "T3", "T4", "T5", "T6", "T7", "CN").forEach { h ->
+                        Text(
+                            text = h,
+                            modifier = Modifier.weight(1f),
+                            textAlign = TextAlign.Center,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = ProColors.Muted
+                        )
+                    }
+                }
+
+                val daysInMonth = currentYearMonth.lengthOfMonth()
+                val firstOffset = currentYearMonth.atDay(1).dayOfWeek.value - 1
+                val totalCells = ((firstOffset + daysInMonth + 6) / 7) * 7
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    for (row in 0 until (totalCells / 7)) {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            for (col in 0 until 7) {
+                                val dayNum = row * 7 + col - firstOffset + 1
+                                if (dayNum in 1..daysInMonth) {
+                                    val d = currentYearMonth.atDay(dayNum)
+                                    val dStr = d.format(dateFmt)
+                                    val dayList = shiftsByDate[dStr].orEmpty()
+                                    val isSelected = selectedDate == dStr
+                                    val isToday = dStr == todayStr
+                                    val dotColor = when {
+                                        dayList.any { it.status == "ACTIVE" } -> ProColors.Emerald
+                                        dayList.isNotEmpty() -> ProColors.Primary
+                                        else -> Color.Transparent
+                                    }
+                                    Column(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .clip(RoundedCornerShape(10.dp))
+                                            .background(
+                                                when {
+                                                    isSelected -> ProColors.Primary
+                                                    isToday -> ProColors.PrimarySoft.copy(alpha = 0.7f)
+                                                    else -> Color.Transparent
+                                                }
+                                            )
+                                            .border(
+                                                width = if (isSelected || isToday) 1.dp else 0.dp,
+                                                color = if (isSelected || isToday) ProColors.Primary else Color.Transparent,
+                                                shape = RoundedCornerShape(10.dp)
+                                            )
+                                            .clickable { selectedDate = dStr }
+                                            .padding(vertical = 6.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally
+                                    ) {
+                                        Text(
+                                            text = dayNum.toString(),
+                                            fontSize = 13.sp,
+                                            fontWeight = if (isSelected || isToday) FontWeight.Bold else FontWeight.Medium,
+                                            color = if (isSelected) Color.White else ProColors.Ink
+                                        )
+                                        Spacer(Modifier.height(2.dp))
+                                        if (dayList.isNotEmpty()) {
+                                            Text(
+                                                text = "${dayList.size} ca",
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = if (isSelected) Color.White else dotColor
+                                            )
+                                        } else {
+                                            Spacer(Modifier.height(12.dp))
+                                        }
+                                    }
+                                } else {
+                                    Spacer(Modifier.weight(1f))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Danh sách ca trực của ngày đang chọn trong tháng
+        ProSectionHeader(
+            title = "Ca trực ngày $selectedDate (${selectedDayShifts.size})",
+            actionText = "+ Phân ca",
+            onAction = { onAssignForDate(selectedDate) }
+        )
+        if (selectedDayShifts.isEmpty()) {
+            EmptyStateCard(
+                title = "Chưa có ca trực ngày $selectedDate",
+                subtitle = "Nhấn \"+ Phân ca\" để xếp nhân viên trực trong ngày này.",
+                actionLabel = "+ Phân ca ngày này",
+                onAction = { onAssignForDate(selectedDate) }
+            )
+        } else {
+            selectedDayShifts.forEach { sh ->
+                ProCard {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        ProAvatar(name = sh.staffName, size = 36.dp)
+                        Spacer(Modifier.width(10.dp))
+                        Column(Modifier.weight(1f)) {
+                            Text(sh.staffName, fontWeight = FontWeight.Bold, fontSize = 13.5.sp, color = ProColors.Ink)
+                            Text("${sh.shiftSlot} · ${sh.courtName}", fontSize = 12.sp, color = ProColors.SubInk)
+                            Text(sh.duty, fontSize = 11.sp, color = ProColors.Muted)
+                        }
+                        val (stLabel, stColor, stBg) = when (sh.status) {
+                            "ACTIVE" -> Triple("Đang trực", ProColors.Emerald, ProColors.EmeraldBg)
+                            "COMPLETED" -> Triple("Hoàn thành", ProColors.SubInk, ProColors.Surface)
+                            else -> Triple("Sắp tới", ProColors.Primary, ProColors.PrimarySoft)
+                        }
+                        StatusBadge(stLabel, stColor, stBg)
+                        if (sh.status == "UPCOMING") {
+                            IconButton(onClick = { onDeleteShift(sh) }, modifier = Modifier.size(30.dp)) {
+                                Icon(Icons.Rounded.Close, contentDescription = "Xóa ca", tint = ProColors.Rose, modifier = Modifier.size(16.dp))
+                            }
+                        }
                     }
                 }
             }
@@ -1912,12 +2144,57 @@ private fun OwnerReportsTab(
     onResolveRecurring: (requestId: String, decision: String, refundAmount: Int?, ownerNote: String) -> Unit = { _, _, _, _ -> },
     onProactiveWeatherPostpone: (sessionId: String, ownerNote: String) -> Unit = { _, _ -> },
 ) {
-    val pendingCash = reports.filter { it.status == "PENDING" }.sumOf { it.cashAmount }
-    val confirmedCash = reports.filter { it.status == "CONFIRMED" }.sumOf { it.cashAmount }
     val pendingCount = reports.count { it.status == "PENDING" }
-    val confirmedCount = reports.count { it.status == "CONFIRMED" }
     val pendingRecurringCount = recurringRequests.count { it.status == "PENDING" }
     var subTabIndex by remember { mutableIntStateOf(if (pendingRecurringCount > 0 && pendingCount == 0) 1 else 0) }
+    var periodFilter by remember { mutableStateOf("ALL") } // "TODAY", "WEEK", "MONTH", "ALL", "DATE"
+    var pickedDate by remember { mutableStateOf<LocalDate?>(null) }
+    var showDatePicker by remember { mutableStateOf(false) }
+
+    val dateFmt = remember { DateTimeFormatter.ofPattern("dd/MM/yyyy") }
+    val dateRegex = remember { Regex("""(\d{2}/\d{2}/\d{4})""") }
+    val today = remember { LocalDate.now() }
+    val todayStr = remember(today) { today.format(dateFmt) }
+    val weekStart = remember(today) { today.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY)) }
+    val currentYm = remember(today) { YearMonth.from(today) }
+
+    fun extractReportDate(raw: String): LocalDate? {
+        val m = dateRegex.find(raw)?.groupValues?.getOrNull(1) ?: return null
+        return runCatching { LocalDate.parse(m, dateFmt) }.getOrNull()
+    }
+
+    val datesWithReports = remember(reports) {
+        reports.mapNotNull { extractReportDate(it.shiftDate) }.toSet()
+    }
+
+    val filteredReports = remember(reports, periodFilter, pickedDate) {
+        reports.filter { r ->
+            val d = extractReportDate(r.shiftDate)
+            when (periodFilter) {
+                "TODAY" -> d == today
+                "WEEK" -> d != null && !d.isBefore(weekStart) && !d.isAfter(weekStart.plusDays(6))
+                "MONTH" -> d != null && YearMonth.from(d) == currentYm
+                "DATE" -> pickedDate != null && d == pickedDate
+                else -> true
+            }
+        }
+    }
+
+    val pendingCash = filteredReports.filter { it.status == "PENDING" }.sumOf { it.cashAmount }
+    val confirmedCash = filteredReports.filter { it.status == "CONFIRMED" }.sumOf { it.cashAmount }
+    val totalQrFiltered = filteredReports.sumOf { it.qrAmount }
+    val filteredPendingCount = filteredReports.count { it.status == "PENDING" }
+    val filteredConfirmedCount = filteredReports.count { it.status == "CONFIRMED" }
+
+    // Nhóm báo cáo két theo từng ngày (mới nhất trước) để thấy rõ mỗi ngày thu bao nhiêu
+    val groupedByDay = remember(filteredReports) {
+        filteredReports
+            .groupBy { r -> dateRegex.find(r.shiftDate)?.groupValues?.getOrNull(1) ?: "Khác" }
+            .entries
+            .sortedByDescending { (dStr, _) ->
+                runCatching { LocalDate.parse(dStr, dateFmt) }.getOrNull() ?: LocalDate.MIN
+            }
+    }
 
     LazyColumn(
         contentPadding = PaddingValues(16.dp),
@@ -1945,6 +2222,100 @@ private fun OwnerReportsTab(
             }
             return@LazyColumn
         }
+
+        // Bộ lọc thời gian rõ ràng: Hôm nay / Tuần này / Tháng này / Tất cả + nút Chọn ngày trên lịch
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    listOf(
+                        "TODAY" to "Hôm nay",
+                        "WEEK" to "Tuần",
+                        "MONTH" to "Tháng",
+                        "ALL" to "Tất cả",
+                    ).forEach { (key, label) ->
+                        val selected = periodFilter == key
+                        Surface(
+                            color = if (selected) ProColors.Primary else Color.White,
+                            shape = RoundedCornerShape(999.dp),
+                            border = BorderStroke(1.dp, if (selected) ProColors.Primary else ProColors.Border),
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(999.dp))
+                                .clickable {
+                                    periodFilter = key
+                                    pickedDate = null
+                                }
+                        ) {
+                            Text(
+                                text = label,
+                                fontSize = 11.5.sp,
+                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                color = if (selected) Color.White else ProColors.SubInk,
+                                textAlign = TextAlign.Center,
+                                maxLines = 1,
+                                modifier = Modifier.padding(vertical = 7.dp, horizontal = 4.dp)
+                            )
+                        }
+                    }
+                    // Nút mở lịch chọn 1 ngày bất kỳ
+                    val isDateSelected = periodFilter == "DATE" && pickedDate != null
+                    Surface(
+                        color = if (isDateSelected) ProColors.Primary else Color.White,
+                        shape = RoundedCornerShape(999.dp),
+                        border = BorderStroke(1.dp, if (isDateSelected) ProColors.Primary else ProColors.Primary.copy(alpha = 0.45f)),
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(999.dp))
+                            .clickable { showDatePicker = true }
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                Icons.Rounded.DateRange,
+                                contentDescription = "Chọn ngày",
+                                tint = if (isDateSelected) Color.White else ProColors.Primary,
+                                modifier = Modifier.size(15.dp)
+                            )
+                            Text(
+                                text = if (isDateSelected) pickedDate!!.format(DateTimeFormatter.ofPattern("dd/MM")) else "Lịch",
+                                fontSize = 11.5.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (isDateSelected) Color.White else ProColors.Primary,
+                                maxLines = 1
+                            )
+                        }
+                    }
+                }
+                if (periodFilter == "DATE" && pickedDate != null) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Đang xem ngày: ${pickedDate!!.format(dateFmt)}",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = ProColors.Primary
+                        )
+                        Text(
+                            text = "Đổi ngày",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = ProColors.Primary,
+                            modifier = Modifier.clickable { showDatePicker = true }
+                        )
+                    }
+                }
+            }
+        }
+
         item {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 ProKpiCard(
@@ -1952,7 +2323,7 @@ private fun OwnerReportsTab(
                     iconTint = ProColors.Amber,
                     iconBg = ProColors.AmberBg,
                     value = "${pendingCash.vnd()} đ",
-                    label = "Chờ duyệt ($pendingCount ca)",
+                    label = "Chờ duyệt ($filteredPendingCount ca)",
                     modifier = Modifier.weight(1f)
                 )
                 ProKpiCard(
@@ -1960,21 +2331,108 @@ private fun OwnerReportsTab(
                     iconTint = ProColors.Emerald,
                     iconBg = ProColors.EmeraldBg,
                     value = "${confirmedCash.vnd()} đ",
-                    label = "Đã về két ($confirmedCount ca)",
+                    label = "Đã về két ($filteredConfirmedCount ca)",
                     modifier = Modifier.weight(1f)
                 )
             }
         }
 
-        if (reports.isEmpty()) {
+        item {
+            val totalCashFiltered = filteredReports.sumOf { it.cashAmount }
+            val grandTotalFiltered = totalCashFiltered + totalQrFiltered
+            // Dùng nền đục (opaque) để tránh bóng shadow bị loang qua nền mờ
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                color = Color(0xFFEEF4FF),
+                shape = RoundedCornerShape(16.dp),
+                border = BorderStroke(1.dp, ProColors.Primary.copy(alpha = 0.22f)),
+                shadowElevation = 0.dp
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                        Text(
+                            text = "Tổng thu kỳ đang xem (${filteredReports.size} ca)",
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = ProColors.Ink,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = "Tiền mặt: ${totalCashFiltered.vnd()} đ · VietQR: ${totalQrFiltered.vnd()} đ",
+                            fontSize = 11.5.sp,
+                            color = ProColors.SubInk,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                    Text(
+                        text = "${grandTotalFiltered.vnd()} đ",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        color = ProColors.Primary,
+                        maxLines = 1,
+                        softWrap = false
+                    )
+                }
+            }
+        }
+
+        if (filteredReports.isEmpty()) {
             item {
                 EmptyStateCard(
-                    title = "Chưa có báo cáo bàn giao",
-                    subtitle = "Khi nhân viên kết thúc ca và nộp két, báo cáo sẽ hiển thị tại đây."
+                    title = "Không có báo cáo bàn giao trong kỳ này",
+                    subtitle = "Thử chuyển bộ lọc sang Tuần này / Tháng này / Tất cả để xem các ngày khác."
                 )
             }
         } else {
-            items(reports) { r ->
+            groupedByDay.forEach { (dayStr, dayReports) ->
+                val dayCash = dayReports.sumOf { it.cashAmount }
+                val dayQr = dayReports.sumOf { it.qrAmount }
+                val dayTotal = dayCash + dayQr
+                val dayTag = if (dayStr == todayStr) " (Hôm nay)" else ""
+
+                item(key = "header_$dayStr") {
+                    Surface(
+                        color = ProColors.Surface,
+                        shape = RoundedCornerShape(14.dp),
+                        border = BorderStroke(1.dp, ProColors.Border),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Column(Modifier.padding(horizontal = 14.dp, vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Ngày $dayStr$dayTag",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 13.5.sp,
+                                    color = ProColors.Ink
+                                )
+                                Text(
+                                    text = "Tổng: ${dayTotal.vnd()} đ",
+                                    fontWeight = FontWeight.ExtraBold,
+                                    fontSize = 13.5.sp,
+                                    color = ProColors.Primary
+                                )
+                            }
+                            Text(
+                                text = "${dayReports.size} ca · Tiền mặt: ${dayCash.vnd()} đ · VietQR: ${dayQr.vnd()} đ",
+                                fontSize = 11.5.sp,
+                                color = ProColors.SubInk,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                    }
+                }
+
+                items(dayReports, key = { it.id }) { r ->
                 val isConfirmed = r.status == "CONFIRMED"
                 val isDiscrepancy = r.status == "DISCREPANCY"
                 val stripeColor = when {
@@ -2080,8 +2538,146 @@ private fun OwnerReportsTab(
                     }
                 }
             }
+            }
         }
     }
+
+    if (showDatePicker) {
+        CashboxCalendarPickerDialog(
+            initialDate = pickedDate ?: today,
+            datesWithReports = datesWithReports,
+            onDismiss = { showDatePicker = false },
+            onSelectDate = { date ->
+                pickedDate = date
+                periodFilter = "DATE"
+                showDatePicker = false
+            }
+        )
+    }
+}
+
+@Composable
+private fun CashboxCalendarPickerDialog(
+    initialDate: LocalDate,
+    datesWithReports: Set<LocalDate>,
+    onDismiss: () -> Unit,
+    onSelectDate: (LocalDate) -> Unit,
+) {
+    val today = remember { LocalDate.now() }
+    var currentYm by remember { mutableStateOf(YearMonth.from(initialDate)) }
+    var tempSelected by remember { mutableStateOf(initialDate) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        containerColor = Color.White,
+        title = {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                IconButton(onClick = { currentYm = currentYm.minusMonths(1) }, modifier = Modifier.size(32.dp)) {
+                    Icon(Icons.Rounded.ChevronLeft, contentDescription = "Tháng trước", tint = ProColors.Ink)
+                }
+                Text(
+                    text = "Tháng ${currentYm.monthValue}, ${currentYm.year}",
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 16.sp,
+                    color = ProColors.Ink
+                )
+                IconButton(onClick = { currentYm = currentYm.plusMonths(1) }, modifier = Modifier.size(32.dp)) {
+                    Icon(Icons.Rounded.ChevronRight, contentDescription = "Tháng sau", tint = ProColors.Ink)
+                }
+            }
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(Modifier.fillMaxWidth()) {
+                    listOf("T2", "T3", "T4", "T5", "T6", "T7", "CN").forEach { h ->
+                        Text(
+                            text = h,
+                            modifier = Modifier.weight(1f),
+                            textAlign = TextAlign.Center,
+                            fontSize = 11.5.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = ProColors.Muted
+                        )
+                    }
+                }
+                val daysInMonth = currentYm.lengthOfMonth()
+                val firstOffset = currentYm.atDay(1).dayOfWeek.value - 1
+                val totalCells = ((firstOffset + daysInMonth + 6) / 7) * 7
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    for (row in 0 until (totalCells / 7)) {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            for (col in 0 until 7) {
+                                val dayNum = row * 7 + col - firstOffset + 1
+                                if (dayNum in 1..daysInMonth) {
+                                    val d = currentYm.atDay(dayNum)
+                                    val isSel = d == tempSelected
+                                    val isToday = d == today
+                                    val hasReport = d in datesWithReports
+                                    Column(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .clip(RoundedCornerShape(10.dp))
+                                            .background(
+                                                when {
+                                                    isSel -> ProColors.Primary
+                                                    isToday -> ProColors.PrimarySoft
+                                                    else -> Color.Transparent
+                                                }
+                                            )
+                                            .clickable { tempSelected = d }
+                                            .padding(vertical = 6.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally
+                                    ) {
+                                        Text(
+                                            text = dayNum.toString(),
+                                            fontSize = 13.sp,
+                                            fontWeight = if (isSel || isToday) FontWeight.Bold else FontWeight.Medium,
+                                            color = if (isSel) Color.White else ProColors.Ink
+                                        )
+                                        Spacer(Modifier.height(2.dp))
+                                        Box(
+                                            modifier = Modifier
+                                                .size(5.dp)
+                                                .clip(CircleShape)
+                                                .background(
+                                                    when {
+                                                        !hasReport -> Color.Transparent
+                                                        isSel -> Color.White
+                                                        else -> ProColors.Emerald
+                                                    }
+                                                )
+                                        )
+                                    }
+                                } else {
+                                    Spacer(Modifier.weight(1f))
+                                }
+                            }
+                        }
+                    }
+                }
+                Text(
+                    text = "Chấm xanh lá là ngày có dữ liệu báo cáo bàn giao két.",
+                    fontSize = 11.sp,
+                    color = ProColors.Muted
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = { onSelectDate(tempSelected) },
+                colors = ButtonDefaults.buttonColors(containerColor = ProColors.Primary)
+            ) {
+                Text("Xem ngày này")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Đóng") }
+        }
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

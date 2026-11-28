@@ -8,6 +8,7 @@ import com.easysport.entity.CourtHoldSlot;
 import com.easysport.entity.CourtResource;
 import com.easysport.entity.InventoryItem;
 import com.easysport.entity.InventoryTransaction;
+import com.easysport.entity.Payment;
 import com.easysport.entity.PosSale;
 import com.easysport.entity.ShiftReport;
 import com.easysport.entity.StaffShift;
@@ -19,6 +20,7 @@ import com.easysport.repository.CourtRepository;
 import com.easysport.repository.CourtResourceRepository;
 import com.easysport.repository.InventoryItemRepository;
 import com.easysport.repository.InventoryTransactionRepository;
+import com.easysport.repository.PaymentRepository;
 import com.easysport.repository.PosSaleRepository;
 import com.easysport.repository.RecurringSessionRepository;
 import com.easysport.repository.ShiftReportRepository;
@@ -71,6 +73,9 @@ public class StaffController {
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private InventoryTransactionRepository inventoryTransactionRepository;
+
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private PaymentRepository paymentRepository;
 
     public StaffController(AuthService authService,
                            BookingRepository bookingRepository,
@@ -153,10 +158,11 @@ public class StaffController {
         String todayStr = LocalDate.now(clock).format(DATE_FORMAT);
         List<StaffShift> myShifts = staffShiftRepository.findByStaffIdOrderByCreatedAtDesc(actor.getId());
         shiftPlanningService.autoCloseExpiredActiveShifts(myShifts);
+        boolean enforce = shiftPlanningService.isEnforceTimeWindow();
         boolean hasActiveShift = myShifts.stream()
                 .anyMatch(s -> "ACTIVE".equalsIgnoreCase(s.getStatus())
                         && todayStr.equals(s.getShiftDate())
-                        && (courtId == null || courtId.isBlank()
+                        && (!enforce || courtId == null || courtId.isBlank()
                         || s.getCourtId() == null || s.getCourtId().isBlank()
                         || s.getCourtId().equals(courtId)));
         if (!hasActiveShift) {
@@ -1081,6 +1087,94 @@ public class StaffController {
         String b = fieldB != null ? fieldB.trim().toLowerCase() : "";
         if (a.isEmpty() || b.isEmpty()) return true;
         return a.equals(b) || a.contains(b) || b.contains(a);
+    }
+
+    @PostMapping("/qr/checkout")
+    public ResponseEntity<ApiResponse<Map<String, Object>>> createStaffQrCheckout(
+            @RequestHeader(value = "Authorization", required = false) String authHeader,
+            @RequestBody Map<String, Object> body
+    ) {
+        User staff = requireStaffOrOwner(authHeader);
+        if (paymentRepository == null) {
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                    .body(ApiResponse.error("Hệ thống thanh toán SePay chưa sẵn sàng."));
+        }
+        int amount = body.get("amount") instanceof Number n ? n.intValue() : 0;
+        if (amount <= 0) {
+            return ResponseEntity.badRequest().body(ApiResponse.error("Số tiền thanh toán QR phải lớn hơn 0."));
+        }
+        String description = String.valueOf(body.getOrDefault("description", "Thanh toán tại quầy EasySport")).trim();
+        if (description.length() > 500) description = description.substring(0, 500);
+        String referenceId = body.get("referenceId") != null ? String.valueOf(body.get("referenceId")).trim() : "";
+
+        LocalDateTime now = LocalDateTime.now(clock);
+        LocalDateTime expiresAt = now.plusMinutes(5);
+        String suffix = UUID.randomUUID().toString().replace("-", "");
+        String paymentId = "pay_staff_" + suffix.substring(0, 16);
+        String invoiceNumber = "ESPOS-" + DateTimeFormatter.ofPattern("yyyyMMddHHmmss").format(now)
+                + "-" + suffix.substring(16, 20).toUpperCase();
+        String checkoutToken = UUID.randomUUID().toString().replace("-", "");
+        String bookingRef = !referenceId.isBlank() ? referenceId : ("STAFF_POS_" + suffix.substring(0, 10));
+
+        Payment payment = new Payment(
+                paymentId,
+                bookingRef,
+                invoiceNumber,
+                amount,
+                "VND",
+                "QR_TRANSFER",
+                checkoutToken,
+                expiresAt
+        );
+        payment.setCreatedAt(now);
+        payment.setRawIpnData(description);
+        paymentRepository.save(payment);
+
+        Map<String, Object> resp = buildStaffQrResponse(payment, now);
+        return ResponseEntity.ok(ApiResponse.success("Đã khởi tạo phiên thanh toán SePay QR", resp));
+    }
+
+    @GetMapping("/qr/{paymentId}/status")
+    public ResponseEntity<ApiResponse<Map<String, Object>>> getStaffQrStatus(
+            @RequestHeader(value = "Authorization", required = false) String authHeader,
+            @PathVariable String paymentId
+    ) {
+        requireStaffOrOwner(authHeader);
+        if (paymentRepository == null) {
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
+                    .body(ApiResponse.error("Hệ thống thanh toán SePay chưa sẵn sàng."));
+        }
+        Optional<Payment> opt = paymentRepository.findById(paymentId);
+        if (opt.isEmpty() || !paymentId.startsWith("pay_staff_")) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                    .body(ApiResponse.error("Không tìm thấy phiên thanh toán QR."));
+        }
+        Payment payment = opt.get();
+        LocalDateTime now = LocalDateTime.now(clock);
+        if ("PENDING".equalsIgnoreCase(payment.getStatus())
+                && payment.getExpiresAt() != null
+                && now.isAfter(payment.getExpiresAt())) {
+            payment.setStatus("EXPIRED");
+            paymentRepository.save(payment);
+        }
+        return ResponseEntity.ok(ApiResponse.success("OK", buildStaffQrResponse(payment, now)));
+    }
+
+    private Map<String, Object> buildStaffQrResponse(Payment payment, LocalDateTime now) {
+        Map<String, Object> resp = new LinkedHashMap<>();
+        resp.put("paymentId", payment.getId());
+        resp.put("orderInvoiceNumber", payment.getOrderInvoiceNumber());
+        resp.put("checkoutUrl", "/payments/" + payment.getCheckoutToken() + "/checkout");
+        resp.put("amount", payment.getAmount());
+        resp.put("status", payment.getStatus());
+        resp.put("isPaid", "PAID".equalsIgnoreCase(payment.getStatus()));
+        resp.put("isExpired", "EXPIRED".equalsIgnoreCase(payment.getStatus())
+                || ("PENDING".equalsIgnoreCase(payment.getStatus())
+                && payment.getExpiresAt() != null && now.isAfter(payment.getExpiresAt())));
+        resp.put("expiresAt", payment.getExpiresAt() != null ? payment.getExpiresAt().toString() : null);
+        resp.put("serverNow", now.toString());
+        resp.put("confirmedAt", payment.getConfirmedAt() != null ? payment.getConfirmedAt().toString() : null);
+        return resp;
     }
 
     public static boolean isQrMethod(String method) {

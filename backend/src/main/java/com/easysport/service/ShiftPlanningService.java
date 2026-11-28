@@ -564,6 +564,10 @@ public class ShiftPlanningService {
         return result;
     }
 
+    public boolean isEnforceTimeWindow() {
+        return enforceTimeWindow;
+    }
+
     public StaffShift clockIn(User actor, String shiftId) {
         StaffShift shift = staffShiftRepository.findById(shiftId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Không tìm thấy ca làm việc"));
@@ -671,7 +675,7 @@ public class ShiftPlanningService {
             }
             LocalTime[] times = timesOf(s.getShiftSlot());
             boolean expired = shiftDate.isBefore(today);
-            if (!expired && times != null) {
+            if (!expired && times != null && enforceTimeWindow) {
                 LocalDateTime graceEnd = shiftDate.atTime(times[1]).plusMinutes(30);
                 expired = now.isAfter(graceEnd);
             }
