@@ -81,10 +81,12 @@ import com.example.easysport.data.model.InventoryItemModel
 import com.example.easysport.data.model.OwnerInventoryData
 import com.example.easysport.data.model.OwnerInventoryStatsData
 import com.example.easysport.data.model.OwnerOverviewData
+import com.example.easysport.data.model.OwnerRecurringSessionItem
 import com.example.easysport.data.model.OwnerStaffAccount
 import com.example.easysport.data.model.OwnerWeekSchedule
 import com.example.easysport.data.model.ScheduleDay
 import com.example.easysport.data.model.ScheduleSlot
+import com.example.easysport.data.model.SessionChangeRequestItem
 import com.example.easysport.data.model.ShiftReportItem
 import com.example.easysport.data.model.StaffMemberOption
 import com.example.easysport.data.model.StaffShiftItem
@@ -143,6 +145,9 @@ fun OwnerDashboardScreen(
     var schedule by remember { mutableStateOf<OwnerWeekSchedule?>(null) }
     var weekStart by remember { mutableStateOf<String?>(null) }
     var reports by remember { mutableStateOf<List<ShiftReportItem>>(emptyList()) }
+    var recurringRequests by remember { mutableStateOf<List<SessionChangeRequestItem>>(emptyList()) }
+    var recurringSessions by remember { mutableStateOf<List<OwnerRecurringSessionItem>>(emptyList()) }
+    var isHandlingRecurring by remember { mutableStateOf(false) }
     var staffAccounts by remember { mutableStateOf<List<OwnerStaffAccount>>(emptyList()) }
     var selectedPeriod by remember { mutableStateOf("ALL") }
     var selectedBranchId by remember { mutableStateOf<String?>(null) }
@@ -198,6 +203,8 @@ fun OwnerDashboardScreen(
                 if (weekStart == null) weekStart = sc.weekStart
             }
             StaffOwnerApiClient.getOwnerReports().onSuccess { reports = it }
+            StaffOwnerApiClient.getOwnerRecurringRequests().onSuccess { recurringRequests = it }
+            StaffOwnerApiClient.getOwnerRecurringSessions().onSuccess { recurringSessions = it }
             StaffOwnerApiClient.getOwnerStaffList().onSuccess { staffAccounts = it }
             StaffOwnerApiClient.getOwnerInventory(targetInvBranch).onSuccess { inventoryData = it }
             StaffOwnerApiClient.getOwnerInventoryStats(targetInvBranch, targetInvPeriod).onSuccess { inventoryStats = it }
@@ -230,8 +237,11 @@ fun OwnerDashboardScreen(
         }
     }
 
-    val pendingReportCount = remember(reports, overview) {
-        reports.count { it.status == "PENDING" }.takeIf { reports.isNotEmpty() } ?: (overview?.pendingReports ?: 0)
+    val pendingReportCount = remember(reports, overview, recurringRequests) {
+        val shiftPending = reports.count { it.status == "PENDING" }.takeIf { reports.isNotEmpty() } ?: (overview?.pendingReports ?: 0)
+        val recurringPending = recurringRequests.count { it.status == "PENDING" }.takeIf { recurringRequests.isNotEmpty() }
+            ?: (overview?.pendingRecurringRequests ?: 0)
+        shiftPending + recurringPending
     }
     val lowStockCount = remember(inventoryData) {
         inventoryData?.items?.count { it.lowStock } ?: 0
@@ -348,8 +358,39 @@ fun OwnerDashboardScreen(
                 )
                 OwnerScreen.REPORTS -> OwnerReportsTab(
                     reports = reports,
+                    recurringRequests = recurringRequests,
+                    recurringSessions = recurringSessions,
+                    isHandlingRecurring = isHandlingRecurring,
                     onConfirmClick = { pendingConfirmReport = it },
-                    onRejectClick = { pendingRejectReport = it }
+                    onRejectClick = { pendingRejectReport = it },
+                    onResolveRecurring = { reqId, decision, amount, note ->
+                        scope.launch {
+                            isHandlingRecurring = true
+                            StaffOwnerApiClient.resolveOwnerRecurringRequest(reqId, decision, amount, note)
+                                .onSuccess { msg ->
+                                    Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                                    refreshAll()
+                                }
+                                .onFailure { err ->
+                                    Toast.makeText(context, err.localizedMessage ?: "Xử lý thất bại", Toast.LENGTH_LONG).show()
+                                }
+                            isHandlingRecurring = false
+                        }
+                    },
+                    onProactiveWeatherPostpone = { sessionId, note ->
+                        scope.launch {
+                            isHandlingRecurring = true
+                            StaffOwnerApiClient.ownerWeatherPostponeSession(sessionId, note)
+                                .onSuccess { msg ->
+                                    Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                                    refreshAll()
+                                }
+                                .onFailure { err ->
+                                    Toast.makeText(context, err.localizedMessage ?: "Không hoãn được buổi", Toast.LENGTH_LONG).show()
+                                }
+                            isHandlingRecurring = false
+                        }
+                    },
                 )
                 OwnerScreen.MANAGE -> OwnerManageTab(
                     branches = overview?.branchRevenues ?: emptyList(),
@@ -1015,6 +1056,16 @@ private fun OwnerHomeHub(
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text("Tiền mặt ($cashPct%): ${cashVal.toInt().vnd()} đ", fontSize = 11.5.sp, color = Color.White.copy(alpha = 0.9f))
                         Text("VietQR ($qrPct%): ${qrVal.toInt().vnd()} đ", fontSize = 11.5.sp, color = Color(0xFF6EE7B7), fontWeight = FontWeight.SemiBold)
+                    }
+                    val walletVal = overview?.walletRevenue ?: 0L
+                    if (walletVal > 0L) {
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            "Thanh toán từ Ví EasySport: ${walletVal.toInt().vnd()} đ",
+                            fontSize = 12.sp,
+                            color = Color.White.copy(alpha = 0.88f),
+                            fontWeight = FontWeight.Medium
+                        )
                     }
                 }
             }
@@ -1853,18 +1904,47 @@ private fun SlotRow(
 @Composable
 private fun OwnerReportsTab(
     reports: List<ShiftReportItem>,
+    recurringRequests: List<SessionChangeRequestItem> = emptyList(),
+    recurringSessions: List<OwnerRecurringSessionItem> = emptyList(),
+    isHandlingRecurring: Boolean = false,
     onConfirmClick: (ShiftReportItem) -> Unit,
     onRejectClick: (ShiftReportItem) -> Unit,
+    onResolveRecurring: (requestId: String, decision: String, refundAmount: Int?, ownerNote: String) -> Unit = { _, _, _, _ -> },
+    onProactiveWeatherPostpone: (sessionId: String, ownerNote: String) -> Unit = { _, _ -> },
 ) {
     val pendingCash = reports.filter { it.status == "PENDING" }.sumOf { it.cashAmount }
     val confirmedCash = reports.filter { it.status == "CONFIRMED" }.sumOf { it.cashAmount }
     val pendingCount = reports.count { it.status == "PENDING" }
     val confirmedCount = reports.count { it.status == "CONFIRMED" }
+    val pendingRecurringCount = recurringRequests.count { it.status == "PENDING" }
+    var subTabIndex by remember { mutableIntStateOf(if (pendingRecurringCount > 0 && pendingCount == 0) 1 else 0) }
 
     LazyColumn(
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        item {
+            EsSegmentedControl(
+                leftLabel = "Bàn giao két ($pendingCount)",
+                rightLabel = "Lịch cố định ($pendingRecurringCount)",
+                isLeftSelected = subTabIndex == 0,
+                onSelectLeft = { subTabIndex = 0 },
+                onSelectRight = { subTabIndex = 1 },
+            )
+        }
+
+        if (subTabIndex == 1) {
+            item {
+                OwnerRecurringRequestsSection(
+                    requests = recurringRequests,
+                    upcomingSessions = recurringSessions,
+                    isSubmitting = isHandlingRecurring,
+                    onResolveRequest = onResolveRecurring,
+                    onProactiveWeatherPostpone = onProactiveWeatherPostpone,
+                )
+            }
+            return@LazyColumn
+        }
         item {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 ProKpiCard(

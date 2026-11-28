@@ -15,6 +15,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.example.easysport.data.model.BookingRequest
+import com.example.easysport.data.model.RecurringCheckoutResult
 import com.example.easysport.data.repository.BookingStore
 import com.example.easysport.data.repository.CourtStore
 import com.example.easysport.data.repository.UserStore
@@ -32,8 +33,11 @@ import com.example.easysport.ui.login.LoginRoute
 import com.example.easysport.ui.map.MapScreen
 import com.example.easysport.ui.news.NewsScreen
 import com.example.easysport.ui.owner.OwnerDashboardScreen
+import com.example.easysport.ui.recurring.MyRecurringPackagesScreen
+import com.example.easysport.ui.recurring.RecurringPaymentScreen
 import com.example.easysport.ui.signup.SignUpRoute
 import com.example.easysport.ui.staff.StaffDashboardScreen
+import com.example.easysport.ui.wallet.WalletScreen
 import kotlinx.coroutines.launch
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
@@ -48,6 +52,9 @@ object Routes {
     const val NEWS = "news"
     const val SEARCH = "search"
     const val PAYMENT = "payment"
+    const val WALLET = "wallet"
+    const val RECURRING_PACKAGES = "recurring_packages"
+    const val RECURRING_PAYMENT = "recurring_payment/{packageId}"
     const val NOTIFICATIONS = "notifications"
     const val COURT = "court/{courtId}"
     const val BOOKING = "booking/{bookingId}"
@@ -56,6 +63,7 @@ object Routes {
 
     fun court(id: String) = "court/$id"
     fun booking(id: String) = "booking/$id"
+    fun recurringPayment(packageId: String) = "recurring_payment/$packageId"
     fun map(sport: String? = null) = if (sport != null) "map?sport=${android.net.Uri.encode(sport)}" else "map"
 }
 
@@ -84,6 +92,7 @@ fun AppNavHost(
     }
 
     var paymentRequest by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf<BookingRequest?>(null) }
+    var pendingRecurringResult by remember { mutableStateOf<RecurringCheckoutResult?>(null) }
     val allBookings by BookingStore.bookings.collectAsStateWithLifecycle()
 
     val bookingDates = remember(allBookings) {
@@ -246,6 +255,8 @@ fun AppNavHost(
                     }
                 },
                 onOpenProfile = { navigateToTab(HomeTab.ACCOUNT) },
+                onOpenWallet = { nav.navigate(Routes.WALLET) },
+                onOpenRecurring = { nav.navigate(Routes.RECURRING_PACKAGES) },
                 onTabSelected = ::navigateToTab,
             )
         }
@@ -283,7 +294,44 @@ fun AppNavHost(
                 },
                 onOpenBooking = { bookingId ->
                     nav.navigate(Routes.booking(bookingId))
-                }
+                },
+                onOpenWallet = { nav.navigate(Routes.WALLET) },
+                onOpenRecurring = { nav.navigate(Routes.RECURRING_PACKAGES) },
+            )
+        }
+
+        composable(Routes.WALLET) {
+            WalletScreen(
+                onBack = { nav.popBackStack() },
+                onOpenRecurring = { nav.navigate(Routes.RECURRING_PACKAGES) },
+            )
+        }
+
+        composable(Routes.RECURRING_PACKAGES) {
+            MyRecurringPackagesScreen(
+                onBack = { nav.popBackStack() },
+                onContinuePayment = { pkgId ->
+                    pendingRecurringResult = null
+                    nav.navigate(Routes.recurringPayment(pkgId))
+                },
+            )
+        }
+
+        composable(
+            route = Routes.RECURRING_PAYMENT,
+            arguments = listOf(navArgument("packageId") { type = NavType.StringType }),
+        ) { entry ->
+            val pkgId = entry.arguments?.getString("packageId") ?: ""
+            RecurringPaymentScreen(
+                packageId = pkgId,
+                initialResult = pendingRecurringResult?.takeIf { it.packageId == pkgId },
+                onBack = { nav.popBackStack() },
+                onPaymentSuccess = {
+                    pendingRecurringResult = null
+                    nav.navigate(Routes.RECURRING_PACKAGES) {
+                        popUpTo(Routes.HOME) { inclusive = false }
+                    }
+                },
             )
         }
 
@@ -322,6 +370,17 @@ fun AppNavHost(
                     onConfirm = { request ->
                         paymentRequest = request
                         nav.navigate(Routes.PAYMENT)
+                    },
+                    onRecurringConfirm = { res ->
+                        pendingRecurringResult = res
+                        if (res.status == "ACTIVE") {
+                            BookingStore.refresh()
+                            nav.navigate(Routes.RECURRING_PACKAGES) {
+                                popUpTo(Routes.HOME) { inclusive = false }
+                            }
+                        } else {
+                            nav.navigate(Routes.recurringPayment(res.packageId))
+                        }
                     },
                 )
             } else {

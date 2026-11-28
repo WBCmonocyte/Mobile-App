@@ -7,10 +7,10 @@ import com.easysport.dto.RegisterRequest;
 import com.easysport.dto.UpdateProfileRequest;
 import com.easysport.entity.User;
 import com.easysport.service.AuthService;
-import com.easysport.service.RegistrationVerificationService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
+import com.easysport.service.RegistrationVerificationService;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -20,6 +20,7 @@ import org.springframework.web.bind.annotation.*;
 public class AuthController {
 
     private final AuthService authService;
+
     private final RegistrationVerificationService registration;
 
     public AuthController(AuthService authService, RegistrationVerificationService registration) {

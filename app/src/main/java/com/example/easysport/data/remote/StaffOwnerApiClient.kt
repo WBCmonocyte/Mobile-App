@@ -10,6 +10,7 @@ import com.example.easysport.data.model.InventoryTransactionModel
 import com.example.easysport.data.model.OwnerInventoryData
 import com.example.easysport.data.model.OwnerInventoryStatsData
 import com.example.easysport.data.model.OwnerOverviewData
+import com.example.easysport.data.model.OwnerRecurringSessionItem
 import com.example.easysport.data.model.OwnerStaffAccount
 import com.example.easysport.data.model.OwnerWeekSchedule
 import com.example.easysport.data.model.PosOrderItemRequest
@@ -17,6 +18,7 @@ import com.example.easysport.data.model.PosSaleItem
 import com.example.easysport.data.model.ReorderSuggestionModel
 import com.example.easysport.data.model.ScheduleDay
 import com.example.easysport.data.model.ScheduleSlot
+import com.example.easysport.data.model.SessionChangeRequestItem
 import com.example.easysport.data.model.ShiftReportItem
 import com.example.easysport.data.model.ShiftTemplate
 import com.example.easysport.data.model.StaffBookingItem
@@ -345,12 +347,14 @@ object StaffOwnerApiClient {
                 totalRevenue = data.optLong("totalRevenue", 0L),
                 cashRevenue = data.optLong("cashRevenue", 0L),
                 qrRevenue = data.optLong("qrRevenue", 0L),
+                walletRevenue = data.optLong("walletRevenue", 0L),
                 courtRevenue = data.optLong("courtRevenue", 0L),
                 posRevenue = data.optLong("posRevenue", 0L),
                 totalBookings = data.optInt("totalBookings", 0),
                 activeBookings = data.optInt("activeBookings", 0),
                 totalCourts = data.optInt("totalCourts", 0),
                 pendingReports = data.optInt("pendingReports", 0),
+                pendingRecurringRequests = data.optInt("pendingRecurringRequests", 0),
                 bookings = parseBookings(data.optJSONArray("bookings") ?: JSONArray()),
                 branchRevenues = branches,
                 fieldRevenues = fieldRevenues,
@@ -716,115 +720,93 @@ object StaffOwnerApiClient {
         }
     }
 
-    private fun parseStaffAccount(o: JSONObject): OwnerStaffAccount = OwnerStaffAccount(
-        id = o.optString("id"),
-        name = o.optString("name"),
-        phone = o.optString("phone"),
-        email = o.optString("email"),
-        locked = o.optBoolean("locked", false),
-        shiftCount = o.optInt("shiftCount", 0),
-        address = o.optString("address", ""),
-        completedShifts = o.optInt("completedShifts", 0),
-        lateCount = o.optInt("lateCount", 0),
-        earlyCount = o.optInt("earlyCount", 0),
-        totalHours = o.optDouble("totalHours", 0.0),
-    )
-
-    private fun parsePosSale(o: JSONObject): PosSaleItem = PosSaleItem(
-        id = o.optString("id"),
-        courtId = o.optString("courtId"),
-        courtName = o.optString("courtName", "Sân bóng"),
-        staffId = o.optString("staffId"),
-        staffName = o.optString("staffName"),
-        shiftId = o.optNullable("shiftId"),
-        itemsNote = o.optString("itemsNote", ""),
-        amount = o.optInt("amount", 0),
-        paymentMethod = o.optString("paymentMethod", "CASH"),
-        saleDate = o.optString("saleDate", ""),
-    )
-
-    private fun parseBookings(arr: JSONArray): List<StaffBookingItem> {
-        val list = mutableListOf<StaffBookingItem>()
-        for (i in 0 until arr.length()) {
-            list.add(parseBooking(arr.getJSONObject(i)))
+    suspend fun getOwnerRecurringRequests(): Result<List<SessionChangeRequestItem>> = withContext(Dispatchers.IO) {
+        runCatching {
+            val (code, body) = send("GET", "${baseUrl()}/api/owner/recurring-requests", null)
+            val arr = extractDataArray(code, body, "Không thể tải danh sách yêu cầu lịch cố định")
+            List(arr.length()) { idx ->
+                val o = arr.getJSONObject(idx)
+                SessionChangeRequestItem(
+                    id = o.optString("id"),
+                    packageId = o.optString("packageId"),
+                    sessionId = o.optString("sessionId"),
+                    userId = o.optString("userId"),
+                    courtId = o.optString("courtId"),
+                    courtName = o.optString("courtName", "Cụm sân"),
+                    customerName = o.optString("customerName", "Khách hàng"),
+                    customerPhone = o.optString("customerPhone", ""),
+                    requestType = o.optString("requestType"),
+                    requestedAction = o.optNullable("requestedAction"),
+                    reasonNote = o.optString("reasonNote", ""),
+                    countsTowardCancelLimit = o.optBoolean("countsTowardCancelLimit", false),
+                    status = o.optString("status", "PENDING"),
+                    approvedRefundAmount = if (o.isNull("approvedRefundAmount")) null else o.optInt("approvedRefundAmount"),
+                    resolvedOutcome = o.optNullable("resolvedOutcome"),
+                    ownerNote = o.optNullable("ownerNote"),
+                    resolvedBy = o.optNullable("resolvedBy"),
+                    createdAt = o.optNullable("createdAt"),
+                    resolvedAt = o.optNullable("resolvedAt"),
+                    sessionDate = o.optString("sessionDate", ""),
+                    timeRange = o.optString("timeRange", ""),
+                    paidAmountSnapshot = o.optInt("paidAmountSnapshot", 0),
+                    refundedAmount = o.optInt("refundedAmount", 0),
+                    maxRefundableAmount = o.optInt("maxRefundableAmount", 0),
+                )
+            }
         }
-        return list
     }
 
-    private fun parseBooking(o: JSONObject): StaffBookingItem {
-        return StaffBookingItem(
-            id = o.optString("id"),
-            courtId = o.optString("courtId"),
-            courtName = o.optString("courtName", "Sân bóng"),
-            fieldDetail = o.optString("fieldDetail", ""),
-            timeRange = o.optString("timeRange", ""),
-            dateLabel = o.optString("dateLabel", ""),
-            totalPrice = o.optInt("totalPrice", 0),
-            depositAmount = o.optInt("depositAmount", 0),
-            remainingAmount = o.optInt("remainingAmount", 0),
-            paymentMethod = o.optString("paymentMethod", "QR_TRANSFER"),
-            status = o.optString("status", "PENDING"),
-            customerName = o.optString("customerName", "Khách hàng"),
-            customerPhone = o.optString("customerPhone", ""),
-            serviceNote = o.optString("serviceNote", ""),
-            serviceAmount = o.optInt("serviceAmount", 0),
-        )
-    }
-
-    private fun parseShifts(arr: JSONArray): List<StaffShiftItem> {
-        val list = mutableListOf<StaffShiftItem>()
-        for (i in 0 until arr.length()) {
-            list.add(parseShift(arr.getJSONObject(i)))
+    suspend fun getOwnerRecurringSessions(): Result<List<OwnerRecurringSessionItem>> = withContext(Dispatchers.IO) {
+        runCatching {
+            val (code, body) = send("GET", "${baseUrl()}/api/owner/recurring-sessions", null)
+            val arr = extractDataArray(code, body, "Không thể tải danh sách buổi lịch cố định")
+            List(arr.length()) { idx ->
+                val o = arr.getJSONObject(idx)
+                OwnerRecurringSessionItem(
+                    sessionId = o.optString("sessionId"),
+                    packageId = o.optString("packageId"),
+                    courtId = o.optString("courtId"),
+                    courtName = o.optString("courtName", "Cụm sân"),
+                    fieldDetail = o.optString("fieldDetail", ""),
+                    sessionIndex = o.optInt("sessionIndex", 1),
+                    sessionDate = o.optString("sessionDate", ""),
+                    timeRange = o.optString("timeRange", ""),
+                    status = o.optString("status", "UPCOMING"),
+                    customerName = o.optString("customerName", "Khách hàng"),
+                    customerPhone = o.optString("customerPhone", ""),
+                )
+            }
         }
-        return list
     }
 
-    private fun JSONObject.optNullable(k: String): String? =
-        if (isNull(k)) null else optString(k).takeIf { it.isNotBlank() && it != "null" }
-
-    private fun parseShift(o: JSONObject): StaffShiftItem {
-        return StaffShiftItem(
-            id = o.optString("id"),
-            staffId = o.optString("staffId"),
-            staffName = o.optString("staffName"),
-            staffPhone = o.optString("staffPhone"),
-            courtId = o.optString("courtId"),
-            courtName = o.optString("courtName"),
-            shiftDate = o.optString("shiftDate"),
-            shiftSlot = o.optString("shiftSlot"),
-            duty = o.optString("duty"),
-            status = o.optString("status", "UPCOMING"),
-            checkInTime = o.optNullable("checkInTime"),
-            checkOutTime = o.optNullable("checkOutTime"),
-            lateMinutes = if (o.isNull("lateMinutes")) null else o.optInt("lateMinutes"),
-            notes = o.optString("notes", ""),
-        )
-    }
-
-    private fun parseReports(arr: JSONArray): List<ShiftReportItem> {
-        val list = mutableListOf<ShiftReportItem>()
-        for (i in 0 until arr.length()) {
-            list.add(parseReport(arr.getJSONObject(i)))
+    suspend fun resolveOwnerRecurringRequest(
+        requestId: String,
+        decision: String,
+        refundAmount: Int? = null,
+        ownerNote: String = "",
+    ): Result<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            val payload = JSONObject().apply {
+                put("decision", decision)
+                if (refundAmount != null) put("refundAmount", refundAmount)
+                if (ownerNote.isNotBlank()) put("ownerNote", ownerNote)
+            }
+            val (code, body) = send("POST", "${baseUrl()}/api/owner/recurring-requests/$requestId/resolve", payload.toString())
+            val data = extractDataObject(code, body, "Không thể xử lý yêu cầu lịch cố định")
+            data.optString("message", "Đã xử lý yêu cầu")
         }
-        return list
     }
 
-    private fun parseReport(o: JSONObject): ShiftReportItem {
-        return ShiftReportItem(
-            id = o.optString("id"),
-            courtId = o.optString("courtId"),
-            courtName = o.optString("courtName"),
-            staffId = o.optString("staffId"),
-            staffName = o.optString("staffName"),
-            shiftDate = o.optString("shiftDate"),
-            cashAmount = o.optInt("cashAmount", 0),
-            qrAmount = o.optInt("qrAmount", 0),
-            totalOrders = o.optInt("totalOrders", 0),
-            handoverNote = o.optString("handoverNote", ""),
-            status = o.optString("status", "PENDING"),
-            confirmedBy = o.optNullable("confirmedBy"),
-            shiftId = o.optNullable("shiftId"),
-        )
+    suspend fun ownerWeatherPostponeSession(
+        sessionId: String,
+        ownerNote: String = "Chủ sân chủ động hoãn do thời tiết xấu",
+    ): Result<String> = withContext(Dispatchers.IO) {
+        runCatching {
+            val payload = JSONObject().apply { put("ownerNote", ownerNote) }
+            val (code, body) = send("POST", "${baseUrl()}/api/owner/recurring-sessions/$sessionId/weather-postpone", payload.toString())
+            val data = extractDataObject(code, body, "Không thể hoãn buổi lịch cố định")
+            data.optString("message", "Đã hoãn buổi do thời tiết")
+        }
     }
 
     // ==================== INVENTORY (KHO HÀNG) ====================
@@ -1160,6 +1142,117 @@ object StaffOwnerApiClient {
         )
     }
 
+    private fun parseStaffAccount(o: JSONObject): OwnerStaffAccount = OwnerStaffAccount(
+        id = o.optString("id"),
+        name = o.optString("name"),
+        phone = o.optString("phone"),
+        email = o.optString("email"),
+        locked = o.optBoolean("locked", false),
+        shiftCount = o.optInt("shiftCount", 0),
+        address = o.optString("address", ""),
+        completedShifts = o.optInt("completedShifts", 0),
+        lateCount = o.optInt("lateCount", 0),
+        earlyCount = o.optInt("earlyCount", 0),
+        totalHours = o.optDouble("totalHours", 0.0),
+    )
+
+    private fun parsePosSale(o: JSONObject): PosSaleItem = PosSaleItem(
+        id = o.optString("id"),
+        courtId = o.optString("courtId"),
+        courtName = o.optString("courtName", "Sân bóng"),
+        staffId = o.optString("staffId"),
+        staffName = o.optString("staffName"),
+        shiftId = o.optNullable("shiftId"),
+        itemsNote = o.optString("itemsNote", ""),
+        amount = o.optInt("amount", 0),
+        paymentMethod = o.optString("paymentMethod", "CASH"),
+        saleDate = o.optString("saleDate", ""),
+    )
+
+    private fun parseBookings(arr: JSONArray): List<StaffBookingItem> {
+        val list = mutableListOf<StaffBookingItem>()
+        for (i in 0 until arr.length()) {
+            list.add(parseBooking(arr.getJSONObject(i)))
+        }
+        return list
+    }
+
+    private fun parseBooking(o: JSONObject): StaffBookingItem {
+        return StaffBookingItem(
+            id = o.optString("id"),
+            courtId = o.optString("courtId"),
+            courtName = o.optString("courtName", "Sân bóng"),
+            fieldDetail = o.optString("fieldDetail", ""),
+            timeRange = o.optString("timeRange", ""),
+            dateLabel = o.optString("dateLabel", ""),
+            totalPrice = o.optInt("totalPrice", 0),
+            depositAmount = o.optInt("depositAmount", 0),
+            remainingAmount = o.optInt("remainingAmount", 0),
+            paymentMethod = o.optString("paymentMethod", "QR_TRANSFER"),
+            status = o.optString("status", "PENDING"),
+            customerName = o.optString("customerName", "Khách hàng"),
+            customerPhone = o.optString("customerPhone", ""),
+            serviceNote = o.optString("serviceNote", ""),
+            serviceAmount = o.optInt("serviceAmount", 0),
+        )
+    }
+
+    private fun parseShifts(arr: JSONArray): List<StaffShiftItem> {
+        val list = mutableListOf<StaffShiftItem>()
+        for (i in 0 until arr.length()) {
+            list.add(parseShift(arr.getJSONObject(i)))
+        }
+        return list
+    }
+
+    private fun JSONObject.optNullable(k: String): String? =
+        if (isNull(k)) null else optString(k).takeIf { it.isNotBlank() && it != "null" }
+
+    private fun parseShift(o: JSONObject): StaffShiftItem {
+        return StaffShiftItem(
+            id = o.optString("id"),
+            staffId = o.optString("staffId"),
+            staffName = o.optString("staffName"),
+            staffPhone = o.optString("staffPhone"),
+            courtId = o.optString("courtId"),
+            courtName = o.optString("courtName"),
+            shiftDate = o.optString("shiftDate"),
+            shiftSlot = o.optString("shiftSlot"),
+            duty = o.optString("duty"),
+            status = o.optString("status", "UPCOMING"),
+            checkInTime = o.optNullable("checkInTime"),
+            checkOutTime = o.optNullable("checkOutTime"),
+            lateMinutes = if (o.isNull("lateMinutes")) null else o.optInt("lateMinutes"),
+            notes = o.optString("notes", ""),
+        )
+    }
+
+    private fun parseReports(arr: JSONArray): List<ShiftReportItem> {
+        val list = mutableListOf<ShiftReportItem>()
+        for (i in 0 until arr.length()) {
+            list.add(parseReport(arr.getJSONObject(i)))
+        }
+        return list
+    }
+
+    private fun parseReport(o: JSONObject): ShiftReportItem {
+        return ShiftReportItem(
+            id = o.optString("id"),
+            courtId = o.optString("courtId"),
+            courtName = o.optString("courtName"),
+            staffId = o.optString("staffId"),
+            staffName = o.optString("staffName"),
+            shiftDate = o.optString("shiftDate"),
+            cashAmount = o.optInt("cashAmount", 0),
+            qrAmount = o.optInt("qrAmount", 0),
+            totalOrders = o.optInt("totalOrders", 0),
+            handoverNote = o.optString("handoverNote", ""),
+            status = o.optString("status", "PENDING"),
+            confirmedBy = o.optNullable("confirmedBy"),
+            shiftId = o.optNullable("shiftId"),
+        )
+    }
+
     private fun extractDataObject(code: Int, body: String, fallback: String): JSONObject {
         if (code !in 200..299) throw IllegalStateException(parseError(body, "$fallback (HTTP $code)"))
         val json = JSONObject(body)
@@ -1183,45 +1276,29 @@ object StaffOwnerApiClient {
     }
 
     private fun send(method: String, urlStr: String, body: String?): Pair<Int, String> {
-        val candidates = mutableListOf<String>()
-        if (urlStr.contains("10.0.2.2:8080")) {
-            candidates.add(urlStr.replace("10.0.2.2:8080", "127.0.0.1:8080"))
-            candidates.add(urlStr)
-        } else if (urlStr.contains("127.0.0.1:8080")) {
-            candidates.add(urlStr)
-            candidates.add(urlStr.replace("127.0.0.1:8080", "10.0.2.2:8080"))
-        } else {
-            candidates.add(urlStr)
-        }
-
-        var lastEx: Exception? = null
-        for ((idx, candidate) in candidates.withIndex()) {
-            val to = if (candidates.size > 1 && idx == 0) 3_000 else 10_000
-            val conn = (URL(candidate).openConnection() as HttpURLConnection).apply {
-                requestMethod = method
-                connectTimeout = to
-                readTimeout = 15_000
-                setRequestProperty("Accept", "application/json")
-                token()?.takeIf { it.isNotBlank() }?.let { setRequestProperty("Authorization", "Bearer $it") }
-                if (body != null) {
-                    setRequestProperty("Content-Type", "application/json; charset=UTF-8")
-                    doOutput = true
-                }
-            }
-            try {
-                if (body != null) {
-                    OutputStreamWriter(conn.outputStream, Charsets.UTF_8).use { it.write(body) }
-                }
-                val code = conn.responseCode
-                val stream = if (code in 200..299) conn.inputStream else conn.errorStream
-                val text = stream?.let { BufferedReader(InputStreamReader(it, Charsets.UTF_8)).use { r -> r.readText() } } ?: ""
-                return Pair(code, text)
-            } catch (e: Exception) {
-                lastEx = e
-            } finally {
-                conn.disconnect()
+        val conn = (URL(urlStr).openConnection() as HttpURLConnection).apply {
+            requestMethod = method
+            connectTimeout = 10_000
+            readTimeout = 15_000
+            setRequestProperty("Accept", "application/json")
+            token()?.takeIf { it.isNotBlank() }?.let { setRequestProperty("Authorization", "Bearer $it") }
+            if (body != null) {
+                setRequestProperty("Content-Type", "application/json; charset=UTF-8")
+                doOutput = true
             }
         }
-        throw IllegalStateException("Không kết nối được backend (${baseUrl()}): ${lastEx?.localizedMessage ?: lastEx?.message}")
+        return try {
+            if (body != null) {
+                OutputStreamWriter(conn.outputStream, Charsets.UTF_8).use { it.write(body) }
+            }
+            val code = conn.responseCode
+            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+            val text = stream?.let { BufferedReader(InputStreamReader(it, Charsets.UTF_8)).use { r -> r.readText() } } ?: ""
+            Pair(code, text)
+        } catch (e: Exception) {
+            throw IllegalStateException("Không kết nối được backend (${baseUrl()}): ${e.localizedMessage ?: e.message}")
+        } finally {
+            conn.disconnect()
+        }
     }
 }

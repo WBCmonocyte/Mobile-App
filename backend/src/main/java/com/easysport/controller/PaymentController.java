@@ -62,7 +62,9 @@ public class PaymentController {
         }
 
         Booking booking = bookingOpt.get();
-        var hold = holdRepository.findByBookingId(booking.getId()).orElse(null);
+        var hold = (payment.getRecurringPackageId() != null
+                ? holdRepository.findByRecurringPackageId(payment.getRecurringPackageId())
+                : holdRepository.findByBookingId(booking.getId())).orElse(null);
         if (hold == null || !hold.isAwaitingPayment(java.time.LocalDateTime.now(clock))
                 || !"PENDING".equals(booking.getStatus()) || !"PENDING".equals(payment.getStatus())) {
             return ResponseEntity.status(HttpStatus.GONE)

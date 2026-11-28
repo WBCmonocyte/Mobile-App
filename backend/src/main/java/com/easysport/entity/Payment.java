@@ -57,6 +57,9 @@ public class Payment {
     @Column(name = "raw_ipn_data", length = 4000)
     private String rawIpnData;
 
+    @Column(name = "recurring_package_id", length = 64)
+    private String recurringPackageId;
+
     public Payment() {}
 
     public Payment(String id, String bookingId, String orderInvoiceNumber, Integer amount,
@@ -115,5 +118,8 @@ public class Payment {
 
     public String getRawIpnData() { return rawIpnData; }
     public void setRawIpnData(String rawIpnData) { this.rawIpnData = rawIpnData; }
+
+    public String getRecurringPackageId() { return recurringPackageId; }
+    public void setRecurringPackageId(String recurringPackageId) { this.recurringPackageId = recurringPackageId; }
 }
 

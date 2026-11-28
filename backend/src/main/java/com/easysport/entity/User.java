@@ -8,6 +8,13 @@ import java.time.LocalDateTime;
 @Table(name = "users")
 public class User {
 
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    public String resetHash;
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    public java.time.Instant resetExpires;
+    @com.fasterxml.jackson.annotation.JsonIgnore
+    public Integer resetAttempts;
+
     @Id
     @Column(length = 50)
     private String id;

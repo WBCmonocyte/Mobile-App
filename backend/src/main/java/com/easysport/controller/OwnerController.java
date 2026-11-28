@@ -1,12 +1,15 @@
 package com.easysport.controller;
 
 import com.easysport.dto.ApiResponse;
+import com.easysport.dto.RecurringDtos;
 import com.easysport.entity.Booking;
 import com.easysport.entity.Court;
 import com.easysport.entity.CourtField;
 import com.easysport.entity.InventoryItem;
 import com.easysport.entity.InventoryTransaction;
 import com.easysport.entity.PosSale;
+import com.easysport.entity.RecurringPackage;
+import com.easysport.entity.SessionChangeRequest;
 import com.easysport.entity.ShiftReport;
 import com.easysport.entity.StaffShift;
 import com.easysport.entity.User;
@@ -15,16 +18,20 @@ import com.easysport.repository.CourtRepository;
 import com.easysport.repository.InventoryItemRepository;
 import com.easysport.repository.InventoryTransactionRepository;
 import com.easysport.repository.PosSaleRepository;
+import com.easysport.repository.RecurringPackageRepository;
 import com.easysport.repository.ShiftReportRepository;
 import com.easysport.repository.StaffShiftRepository;
 import com.easysport.repository.UserRepository;
 import com.easysport.service.AuthService;
+import com.easysport.service.RecurringBookingService;
 import com.easysport.service.ShiftPlanningService;
 import com.easysport.util.PasswordHasher;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.time.Clock;
 import java.time.DayOfWeek;
@@ -33,6 +40,7 @@ import java.time.LocalTime;
 import java.time.YearMonth;
 import java.time.temporal.TemporalAdjusters;
 import java.util.*;
+import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/api/owner")
@@ -46,9 +54,41 @@ public class OwnerController {
     private final PosSaleRepository posSaleRepository;
     private final UserRepository userRepository;
     private final ShiftPlanningService shiftPlanningService;
+    private final Clock clock;
+    private final RecurringPackageRepository recurringPackageRepository;
+    private final RecurringBookingService recurringBookingService;
     private final InventoryItemRepository inventoryItemRepository;
     private final InventoryTransactionRepository inventoryTransactionRepository;
-    private final Clock clock;
+
+    public OwnerController(AuthService authService,
+                           BookingRepository bookingRepository,
+                           CourtRepository courtRepository,
+                           StaffShiftRepository staffShiftRepository,
+                           ShiftReportRepository shiftReportRepository,
+                           PosSaleRepository posSaleRepository,
+                           UserRepository userRepository,
+                           ShiftPlanningService shiftPlanningService,
+                           Clock clock) {
+        this(authService, bookingRepository, courtRepository, staffShiftRepository,
+                shiftReportRepository, posSaleRepository, userRepository, shiftPlanningService, clock,
+                null, null, null, null);
+    }
+
+    public OwnerController(AuthService authService,
+                           BookingRepository bookingRepository,
+                           CourtRepository courtRepository,
+                           StaffShiftRepository staffShiftRepository,
+                           ShiftReportRepository shiftReportRepository,
+                           PosSaleRepository posSaleRepository,
+                           UserRepository userRepository,
+                           ShiftPlanningService shiftPlanningService,
+                           Clock clock,
+                           RecurringPackageRepository recurringPackageRepository,
+                           RecurringBookingService recurringBookingService) {
+        this(authService, bookingRepository, courtRepository, staffShiftRepository,
+                shiftReportRepository, posSaleRepository, userRepository, shiftPlanningService, clock,
+                recurringPackageRepository, recurringBookingService, null, null);
+    }
 
     public OwnerController(AuthService authService,
                            BookingRepository bookingRepository,
@@ -61,6 +101,25 @@ public class OwnerController {
                            InventoryItemRepository inventoryItemRepository,
                            InventoryTransactionRepository inventoryTransactionRepository,
                            Clock clock) {
+        this(authService, bookingRepository, courtRepository, staffShiftRepository,
+                shiftReportRepository, posSaleRepository, userRepository, shiftPlanningService, clock,
+                null, null, inventoryItemRepository, inventoryTransactionRepository);
+    }
+
+    @Autowired
+    public OwnerController(AuthService authService,
+                           BookingRepository bookingRepository,
+                           CourtRepository courtRepository,
+                           StaffShiftRepository staffShiftRepository,
+                           ShiftReportRepository shiftReportRepository,
+                           PosSaleRepository posSaleRepository,
+                           UserRepository userRepository,
+                           ShiftPlanningService shiftPlanningService,
+                           Clock clock,
+                           @Autowired(required = false) RecurringPackageRepository recurringPackageRepository,
+                           @Autowired(required = false) RecurringBookingService recurringBookingService,
+                           @Autowired(required = false) InventoryItemRepository inventoryItemRepository,
+                           @Autowired(required = false) InventoryTransactionRepository inventoryTransactionRepository) {
         this.authService = authService;
         this.bookingRepository = bookingRepository;
         this.courtRepository = courtRepository;
@@ -69,9 +128,11 @@ public class OwnerController {
         this.posSaleRepository = posSaleRepository;
         this.userRepository = userRepository;
         this.shiftPlanningService = shiftPlanningService;
+        this.clock = clock;
+        this.recurringPackageRepository = recurringPackageRepository;
+        this.recurringBookingService = recurringBookingService;
         this.inventoryItemRepository = inventoryItemRepository;
         this.inventoryTransactionRepository = inventoryTransactionRepository;
-        this.clock = clock;
     }
 
     private User requireOwner(String authHeader) {
@@ -88,27 +149,43 @@ public class OwnerController {
         return user;
     }
 
+    public List<Court> getCourtsForOwner(User owner) {
+        List<Court> allCourts = courtRepository.findAll();
+        List<Court> specificallyOwned = allCourts.stream()
+                .filter(c -> Objects.equals(c.getOwnerId(), owner.getId()))
+                .toList();
+        return specificallyOwned.isEmpty()
+                ? allCourts.stream().filter(c -> c.getOwnerId() == null).toList()
+                : specificallyOwned;
+    }
+
     @GetMapping("/overview")
     public ResponseEntity<ApiResponse<Map<String, Object>>> getOverview(
             @RequestHeader(value = "Authorization", required = false) String authHeader,
             @RequestParam(value = "period", required = false, defaultValue = "ALL") String period
     ) {
-        requireOwner(authHeader);
+        User owner = requireOwner(authHeader);
         String normalizedPeriod = period != null ? period.trim().toUpperCase() : "ALL";
         LocalDate today = LocalDate.now(clock);
         LocalDate weekStart = today.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
         LocalDate weekEnd = weekStart.plusDays(6);
         YearMonth thisMonth = YearMonth.from(today);
 
+        List<Court> courts = getCourtsForOwner(owner);
+        Set<String> myCourtIds = courts.stream().map(Court::getId).collect(java.util.stream.Collectors.toSet());
+
         List<Booking> allBookings = bookingRepository.findAllByOrderByCreatedAtDesc();
         List<Booking> bookings = allBookings.stream()
+                .filter(b -> b.getCourtId() != null && myCourtIds.contains(b.getCourtId()))
                 .filter(b -> matchesPeriod(resolveBookingDate(b), normalizedPeriod, today, weekStart, weekEnd, thisMonth))
                 .toList();
 
-        List<Court> courts = courtRepository.findAll();
-        List<ShiftReport> reports = shiftReportRepository.findAllByOrderByCreatedAtDesc();
+        List<ShiftReport> reports = shiftReportRepository.findAllByOrderByCreatedAtDesc().stream()
+                .filter(r -> r.getCourtId() != null && myCourtIds.contains(r.getCourtId()))
+                .toList();
         List<PosSale> allPosSales = posSaleRepository.findAllByOrderByCreatedAtDesc();
         List<PosSale> posSales = allPosSales.stream()
+                .filter(s -> s.getCourtId() != null && myCourtIds.contains(s.getCourtId()))
                 .filter(s -> matchesPeriod(ShiftPlanningService.parseDateOrNull(s.getSaleDate()), normalizedPeriod, today, weekStart, weekEnd, thisMonth))
                 .toList();
 
@@ -122,6 +199,7 @@ public class OwnerController {
         long totalRevenue = 0;
         long cashRevenue = 0;
         long qrRevenue = 0;
+        long walletRevenue = 0;
         long totalCourtRevenue = 0;
         long totalPosRevenue = 0;
         int activeCount = 0;
@@ -151,6 +229,44 @@ public class OwnerController {
                 activeCount++;
                 activeCountByCourt.merge(cId, 1, Integer::sum);
             }
+            if (b.getRecurringPackageId() != null) {
+                // Tiền thuê sân của lịch cố định ghi nhận 1 lần theo RecurringPackage (totalPaid - totalRefunded);
+                // ở đây chỉ cộng thêm doanh thu dịch vụ tại quầy nếu có phát sinh khi trả sân.
+                if ("COMPLETED".equals(st) && !splitSettledIds.contains(b.getId()) && b.getServiceAmount() > 0) {
+                    long svcAmt = b.getServiceAmount();
+                    totalRevenue += svcAmt;
+                    totalPosRevenue += svcAmt;
+                    revenueByCourt.merge(cId, svcAmt, Long::sum);
+                    posRevenueByCourt.merge(cId, svcAmt, Long::sum);
+                    if (StaffController.isQrMethod(b.getPaymentMethod())) {
+                        qrRevenue += svcAmt;
+                    } else if (!"WALLET".equalsIgnoreCase(b.getPaymentMethod()) && !"CREDIT".equalsIgnoreCase(b.getPaymentMethod())) {
+                        cashRevenue += svcAmt;
+                    }
+                    Court courtObj = courtMap.get(cId);
+                    String fieldLabel = resolveShortFieldName(courtObj, b.getFieldDetail());
+                    Map<String, Object> fRow = fieldStatsMap.computeIfAbsent(cId + "|" + fieldLabel, k -> {
+                        Map<String, Object> m = new LinkedHashMap<>();
+                        m.put("courtId", cId);
+                        m.put("courtName", courtObj != null ? courtObj.getName() : (b.getCourtName() != null ? b.getCourtName() : "Sân bóng"));
+                        m.put("fieldName", fieldLabel);
+                        m.put("bookingCount", 0);
+                        m.put("courtRevenue", 0L);
+                        m.put("serviceRevenue", 0L);
+                        m.put("totalRevenue", 0L);
+                        return m;
+                    });
+                    fRow.put("serviceRevenue", (Long) fRow.get("serviceRevenue") + svcAmt);
+                    fRow.put("totalRevenue", (Long) fRow.get("totalRevenue") + svcAmt);
+
+                    String slotKey = resolveTimeSlotBucket(b.getTimeRange());
+                    long[] sArr = slotStats.get(slotKey);
+                    if (sArr != null) {
+                        sArr[1] += svcAmt;
+                    }
+                }
+                continue;
+            }
             if (st.equals("PAID") || st.equals("DEPOSIT_PAID") || st.equals("CHECKED_IN") || st.equals("COMPLETED")) {
                 long amt;
                 long svcPart = 0;
@@ -172,7 +288,9 @@ public class OwnerController {
                 posRevenueByCourt.merge(cId, svcPart, Long::sum);
                 if (StaffController.isQrMethod(b.getPaymentMethod())) {
                     qrRevenue += amt;
-                } else {
+                } else if ("WALLET".equalsIgnoreCase(b.getPaymentMethod())) {
+                    walletRevenue += amt;
+                } else if (!"CREDIT".equalsIgnoreCase(b.getPaymentMethod())) {
                     cashRevenue += amt;
                 }
 
@@ -220,6 +338,51 @@ public class OwnerController {
                 qrRevenue += amt;
             } else {
                 cashRevenue += amt;
+            }
+        }
+
+        if (recurringPackageRepository != null && !myCourtIds.isEmpty()) {
+            for (RecurringPackage pkg : recurringPackageRepository.findByCourtIdInOrderByCreatedAtDesc(new ArrayList<>(myCourtIds))) {
+                if (pkg.getTotalPaid() <= 0) continue;
+                LocalDate pkgDate = pkg.getCreatedAt() != null ? pkg.getCreatedAt().toLocalDate() : null;
+                if (!matchesPeriod(pkgDate, normalizedPeriod, today, weekStart, weekEnd, thisMonth)) continue;
+                long netPaid = Math.max(0L, (long) pkg.getTotalPaid() - pkg.getTotalRefunded());
+                totalRevenue += netPaid;
+                totalCourtRevenue += netPaid;
+                String pkgCourtId = pkg.getCourtId() != null ? pkg.getCourtId() : "";
+                revenueByCourt.merge(pkgCourtId, netPaid, Long::sum);
+                courtRevenueByCourt.merge(pkgCourtId, netPaid, Long::sum);
+                if (StaffController.isQrMethod(pkg.getPaymentMethod())) {
+                    qrRevenue += netPaid;
+                } else if ("WALLET".equalsIgnoreCase(pkg.getPaymentMethod())) {
+                    walletRevenue += netPaid;
+                }
+
+                if (netPaid > 0) {
+                    Court courtObj = courtMap.get(pkgCourtId);
+                    String fieldLabel = resolveShortFieldName(courtObj, pkg.getFieldDetail());
+                    Map<String, Object> fRow = fieldStatsMap.computeIfAbsent(pkgCourtId + "|" + fieldLabel, k -> {
+                        Map<String, Object> m = new LinkedHashMap<>();
+                        m.put("courtId", pkgCourtId);
+                        m.put("courtName", courtObj != null ? courtObj.getName() : (pkg.getCourtName() != null ? pkg.getCourtName() : "Sân bóng"));
+                        m.put("fieldName", fieldLabel);
+                        m.put("bookingCount", 0);
+                        m.put("courtRevenue", 0L);
+                        m.put("serviceRevenue", 0L);
+                        m.put("totalRevenue", 0L);
+                        return m;
+                    });
+                    fRow.put("bookingCount", (Integer) fRow.get("bookingCount") + 1);
+                    fRow.put("courtRevenue", (Long) fRow.get("courtRevenue") + netPaid);
+                    fRow.put("totalRevenue", (Long) fRow.get("totalRevenue") + netPaid);
+
+                    String slotKey = resolveTimeSlotBucket(pkg.getTimeRange());
+                    long[] sArr = slotStats.get(slotKey);
+                    if (sArr != null) {
+                        sArr[0] += 1;
+                        sArr[1] += netPaid;
+                    }
+                }
             }
         }
 
@@ -279,16 +442,23 @@ public class OwnerController {
 
         long pendingReports = reports.stream().filter(r -> "PENDING".equalsIgnoreCase(r.getStatus())).count();
 
+        long pendingRecurringRequests = recurringBookingService != null && !myCourtIds.isEmpty()
+                ? recurringBookingService.getChangeRequestsForOwnerCourts(myCourtIds).stream()
+                        .filter(r -> "PENDING".equalsIgnoreCase(r.getStatus())).count()
+                : 0;
+
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("totalRevenue", totalRevenue);
         result.put("cashRevenue", cashRevenue);
         result.put("qrRevenue", qrRevenue);
+        result.put("walletRevenue", walletRevenue);
         result.put("courtRevenue", totalCourtRevenue);
         result.put("posRevenue", totalPosRevenue);
         result.put("totalBookings", bookings.size());
         result.put("activeBookings", activeCount);
         result.put("totalCourts", courts.size());
         result.put("pendingReports", pendingReports);
+        result.put("pendingRecurringRequests", pendingRecurringRequests);
         result.put("bookings", bookings);
         result.put("branchRevenues", branchRevenues);
         result.put("fieldRevenues", fieldRevenues);
@@ -326,8 +496,11 @@ public class OwnerController {
     public ResponseEntity<ApiResponse<Map<String, Object>>> getShiftsAndStaff(
             @RequestHeader(value = "Authorization", required = false) String authHeader
     ) {
-        requireOwner(authHeader);
-        List<StaffShift> shifts = staffShiftRepository.findAllByOrderByCreatedAtDesc();
+        User owner = requireOwner(authHeader);
+        Set<String> myCourtIds = getCourtsForOwner(owner).stream().map(Court::getId).collect(java.util.stream.Collectors.toSet());
+        List<StaffShift> shifts = staffShiftRepository.findAllByOrderByCreatedAtDesc().stream()
+                .filter(s -> s.getCourtId() == null || myCourtIds.contains(s.getCourtId()))
+                .toList();
         shiftPlanningService.autoCloseExpiredActiveShifts(shifts);
         List<User> staffList = userRepository.findByRole("STAFF");
         List<Map<String, String>> sanitizedStaff = new ArrayList<>();
@@ -352,9 +525,19 @@ public class OwnerController {
             @RequestParam(value = "weekStart", required = false) String weekStartParam,
             @RequestParam(value = "courtId", required = false) String courtId
     ) {
-        requireOwner(authHeader);
+        User owner = requireOwner(authHeader);
+        Set<String> myCourtIds = getCourtsForOwner(owner).stream()
+                .map(Court::getId)
+                .collect(java.util.stream.Collectors.toSet());
+        if (courtId != null && !courtId.isBlank() && !"ALL".equalsIgnoreCase(courtId)) {
+            Court c = courtRepository.findById(courtId).orElse(null);
+            if (c != null && c.getOwnerId() != null && !Objects.equals(c.getOwnerId(), owner.getId())) {
+                throw new org.springframework.web.server.ResponseStatusException(
+                        HttpStatus.FORBIDDEN, "Bạn không có quyền xem lịch phân ca của cụm sân khác.");
+            }
+        }
         LocalDate baseDate = resolveWeekStartDate(weekStartParam);
-        return ResponseEntity.ok(ApiResponse.success("Lịch phân ca tuần", shiftPlanningService.buildWeekSchedule(baseDate, courtId)));
+        return ResponseEntity.ok(ApiResponse.success("Lịch phân ca tuần", shiftPlanningService.buildWeekSchedule(baseDate, courtId, myCourtIds)));
     }
 
     @PostMapping("/shifts/auto-assign")
@@ -362,7 +545,7 @@ public class OwnerController {
             @RequestHeader(value = "Authorization", required = false) String authHeader,
             @RequestBody(required = false) Map<String, Object> body
     ) {
-        requireOwner(authHeader);
+        User owner = requireOwner(authHeader);
         String weekStartParam = body != null && body.get("weekStart") != null
                 ? String.valueOf(body.get("weekStart"))
                 : null;
@@ -372,8 +555,23 @@ public class OwnerController {
         String courtName = body != null && body.get("courtName") != null
                 ? String.valueOf(body.get("courtName")).trim()
                 : null;
-        if (courtId != null && !courtId.isBlank() && (courtName == null || courtName.isBlank())) {
-            courtName = courtRepository.findById(courtId).map(Court::getName).orElse(null);
+        if (courtId != null && !courtId.isBlank() && !"ALL".equalsIgnoreCase(courtId)) {
+            Court c = courtRepository.findById(courtId).orElse(null);
+            if (c != null && c.getOwnerId() != null && !Objects.equals(c.getOwnerId(), owner.getId())) {
+                throw new org.springframework.web.server.ResponseStatusException(
+                        HttpStatus.FORBIDDEN, "Bạn không có quyền tự động xếp ca cho cụm sân khác.");
+            }
+            if (courtName == null || courtName.isBlank()) {
+                courtName = c != null ? c.getName() : null;
+            }
+        } else {
+            List<Court> myCourts = getCourtsForOwner(owner);
+            if (!myCourts.isEmpty()) {
+                courtId = myCourts.get(0).getId();
+                if (courtName == null || courtName.isBlank()) {
+                    courtName = myCourts.get(0).getName();
+                }
+            }
         }
         LocalDate baseDate = resolveWeekStartDate(weekStartParam);
         Map<String, Object> result = shiftPlanningService.autoAssign(baseDate, courtId, courtName);
@@ -397,7 +595,7 @@ public class OwnerController {
             @RequestHeader(value = "Authorization", required = false) String authHeader,
             @RequestBody Map<String, Object> body
     ) {
-        requireOwner(authHeader);
+        User owner = requireOwner(authHeader);
         String staffId = String.valueOf(body.getOrDefault("staffId", ""));
         User staff = userRepository.findById(staffId).orElse(null);
         if (staff == null || !"STAFF".equalsIgnoreCase(staff.getRole())) {
@@ -411,6 +609,11 @@ public class OwnerController {
                     HttpStatus.BAD_REQUEST, "Ngày làm việc không hợp lệ (định dạng dd/MM/yyyy)");
         }
         String courtId = String.valueOf(body.getOrDefault("courtId", "court_thanh_phat"));
+        Court targetCourt = courtRepository.findById(courtId).orElse(null);
+        if (targetCourt != null && targetCourt.getOwnerId() != null && !Objects.equals(targetCourt.getOwnerId(), owner.getId())) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    HttpStatus.FORBIDDEN, "Bạn không có quyền phân ca cho cụm sân của chủ sân khác.");
+        }
         String courtName = String.valueOf(body.getOrDefault("courtName", "Sân bóng Thành Phát"));
         String shiftSlot = String.valueOf(body.getOrDefault("shiftSlot", "Ca Sáng (06:00 - 12:00)"));
         String duty = String.valueOf(body.getOrDefault("duty", "Lễ tân & Thu ngân"));
@@ -425,13 +628,20 @@ public class OwnerController {
             @PathVariable String id,
             @RequestHeader(value = "Authorization", required = false) String authHeader
     ) {
-        requireOwner(authHeader);
+        User owner = requireOwner(authHeader);
         StaffShift shift = staffShiftRepository.findById(id)
                 .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(
                         HttpStatus.NOT_FOUND, "Không tìm thấy ca trực"));
         if (!"UPCOMING".equalsIgnoreCase(shift.getStatus())) {
             throw new org.springframework.web.server.ResponseStatusException(
                     HttpStatus.CONFLICT, "Không thể hủy ca đã chấm công");
+        }
+        if (shift.getCourtId() != null) {
+            Court c = courtRepository.findById(shift.getCourtId()).orElse(null);
+            if (c != null && c.getOwnerId() != null && !Objects.equals(c.getOwnerId(), owner.getId())) {
+                throw new org.springframework.web.server.ResponseStatusException(
+                        HttpStatus.FORBIDDEN, "Bạn không có quyền hủy ca của cụm sân khác.");
+            }
         }
         staffShiftRepository.deleteById(id);
         return ResponseEntity.ok(ApiResponse.success("Đã hủy ca trực", null));
@@ -441,8 +651,11 @@ public class OwnerController {
     public ResponseEntity<ApiResponse<List<ShiftReport>>> getShiftReports(
             @RequestHeader(value = "Authorization", required = false) String authHeader
     ) {
-        requireOwner(authHeader);
-        List<ShiftReport> list = shiftReportRepository.findAllByOrderByCreatedAtDesc();
+        User owner = requireOwner(authHeader);
+        Set<String> myCourtIds = getCourtsForOwner(owner).stream().map(Court::getId).collect(java.util.stream.Collectors.toSet());
+        List<ShiftReport> list = shiftReportRepository.findAllByOrderByCreatedAtDesc().stream()
+                .filter(r -> r.getCourtId() == null || myCourtIds.contains(r.getCourtId()))
+                .toList();
         return ResponseEntity.ok(ApiResponse.success("Danh sách bàn giao két", list));
     }
 
@@ -455,6 +668,13 @@ public class OwnerController {
         ShiftReport report = shiftReportRepository.findById(id)
                 .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(
                         HttpStatus.NOT_FOUND, "Không tìm thấy báo cáo két"));
+        if (report.getCourtId() != null) {
+            Court c = courtRepository.findById(report.getCourtId()).orElse(null);
+            if (c != null && c.getOwnerId() != null && !Objects.equals(c.getOwnerId(), owner.getId())) {
+                throw new org.springframework.web.server.ResponseStatusException(
+                        HttpStatus.FORBIDDEN, "Bạn không có quyền xác nhận báo cáo két của cụm sân khác.");
+            }
+        }
         report.setStatus("CONFIRMED");
         report.setConfirmedBy(owner.getFullName());
         shiftReportRepository.save(report);
@@ -471,6 +691,13 @@ public class OwnerController {
         ShiftReport report = shiftReportRepository.findById(id)
                 .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(
                         HttpStatus.NOT_FOUND, "Không tìm thấy báo cáo két"));
+        if (report.getCourtId() != null) {
+            Court c = courtRepository.findById(report.getCourtId()).orElse(null);
+            if (c != null && c.getOwnerId() != null && !Objects.equals(c.getOwnerId(), owner.getId())) {
+                throw new org.springframework.web.server.ResponseStatusException(
+                        HttpStatus.FORBIDDEN, "Bạn không có quyền từ chối báo cáo két của cụm sân khác.");
+            }
+        }
         String ownerNote = body != null && body.get("note") != null
                 ? String.valueOf(body.get("note")).trim()
                 : "";
@@ -489,10 +716,14 @@ public class OwnerController {
             @RequestHeader(value = "Authorization", required = false) String authHeader,
             @RequestBody Map<String, Object> body
     ) {
-        requireOwner(authHeader);
+        User owner = requireOwner(authHeader);
         Court court = courtRepository.findById(id)
                 .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(
                         HttpStatus.NOT_FOUND, "Không tìm thấy cụm sân: " + id));
+        if (court.getOwnerId() != null && !Objects.equals(court.getOwnerId(), owner.getId())) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    HttpStatus.FORBIDDEN, "Bạn không có quyền chỉnh sửa bảng giá của cụm sân khác.");
+        }
         int pricePerHour = body.get("pricePerHour") instanceof Number n ? n.intValue() : court.getPricePerHour();
         int morningPrice = body.get("morningPrice") instanceof Number n ? n.intValue() : court.getMorningPrice();
         int afternoonPrice = body.get("afternoonPrice") instanceof Number n ? n.intValue() : court.getAfternoonPrice();
@@ -514,7 +745,7 @@ public class OwnerController {
             @RequestHeader(value = "Authorization", required = false) String authHeader,
             @RequestBody Map<String, Object> body
     ) {
-        requireOwner(authHeader);
+        User owner = requireOwner(authHeader);
         String name = String.valueOf(body.getOrDefault("name", "")).trim();
         String address = String.valueOf(body.getOrDefault("address", "")).trim();
         String sportType = String.valueOf(body.getOrDefault("sportType", "Bóng đá")).trim();
@@ -546,18 +777,10 @@ public class OwnerController {
                 pricePerHour, morningPrice, afternoonPrice, eveningPrice,
                 "court_thanh_phat", latitude, longitude, sportType, indoor
         );
+        court.setOwnerId(owner.getId());
         String city = body.get("city") != null ? String.valueOf(body.get("city")).trim() : null;
         String district = body.get("district") != null ? String.valueOf(body.get("district")).trim() : null;
-        if ((city == null || city.isEmpty()) && address.contains(",")) {
-            String[] parts = address.split(",");
-            if (parts.length >= 2) {
-                String last = parts[parts.length - 1].trim().toLowerCase().replaceAll("[.\\s]", "");
-                if (last.contains("hanoi") || last.contains("hànội")) city = "Hà Nội";
-                else if (last.contains("hcm") || last.contains("tphcm") || last.contains("hochiminh") || last.contains("hồchíminh")) city = "TP. Hồ Chí Minh";
-            }
-        }
-        court.setCity(city);
-        court.setDistrict(district);
+        populateAreaFromAddress(court, address, city, district);
         for (int i = 1; i <= fieldCount; i++) {
             court.getFields().add(new CourtField(
                     courtId + "_f" + i,
@@ -577,10 +800,14 @@ public class OwnerController {
             @RequestHeader(value = "Authorization", required = false) String authHeader,
             @RequestBody Map<String, Object> body
     ) {
-        requireOwner(authHeader);
+        User owner = requireOwner(authHeader);
         Court court = courtRepository.findById(id)
                 .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(
                         HttpStatus.NOT_FOUND, "Không tìm thấy cụm sân: " + id));
+        if (court.getOwnerId() != null && !Objects.equals(court.getOwnerId(), owner.getId())) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    HttpStatus.FORBIDDEN, "Bạn không có quyền chỉnh sửa thông tin của cụm sân khác.");
+        }
         if (body.get("name") != null) {
             String name = String.valueOf(body.get("name")).trim();
             if (!name.isEmpty()) court.setName(name);
@@ -602,11 +829,10 @@ public class OwnerController {
         if (body.get("longitude") instanceof Number lng) {
             court.setLongitude(lng.doubleValue());
         }
-        if (body.get("city") != null) {
-            court.setCity(String.valueOf(body.get("city")).trim());
-        }
-        if (body.get("district") != null) {
-            court.setDistrict(String.valueOf(body.get("district")).trim());
+        String explicitCity = body.get("city") != null ? String.valueOf(body.get("city")).trim() : null;
+        String explicitDistrict = body.get("district") != null ? String.valueOf(body.get("district")).trim() : null;
+        if (explicitCity != null || explicitDistrict != null || body.get("address") != null) {
+            populateAreaFromAddress(court, court.getAddress(), explicitCity, explicitDistrict);
         }
         int pricePerHour = body.get("pricePerHour") instanceof Number n ? n.intValue() : court.getPricePerHour();
         int morningPrice = body.get("morningPrice") instanceof Number n ? n.intValue() : court.getMorningPrice();
@@ -630,10 +856,14 @@ public class OwnerController {
             @RequestHeader(value = "Authorization", required = false) String authHeader,
             @RequestBody Map<String, Object> body
     ) {
-        requireOwner(authHeader);
+        User owner = requireOwner(authHeader);
         Court court = courtRepository.findById(id)
                 .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(
                         HttpStatus.NOT_FOUND, "Không tìm thấy cụm sân: " + id));
+        if (court.getOwnerId() != null && !Objects.equals(court.getOwnerId(), owner.getId())) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    HttpStatus.FORBIDDEN, "Bạn không có quyền thêm sân con cho cụm sân khác.");
+        }
         String label = String.valueOf(body.getOrDefault("label", "")).trim();
         if (label.isEmpty()) {
             throw new org.springframework.web.server.ResponseStatusException(
@@ -655,10 +885,14 @@ public class OwnerController {
             @PathVariable String fieldId,
             @RequestHeader(value = "Authorization", required = false) String authHeader
     ) {
-        requireOwner(authHeader);
+        User owner = requireOwner(authHeader);
         Court court = courtRepository.findById(id)
                 .orElseThrow(() -> new org.springframework.web.server.ResponseStatusException(
                         HttpStatus.NOT_FOUND, "Không tìm thấy cụm sân: " + id));
+        if (court.getOwnerId() != null && !Objects.equals(court.getOwnerId(), owner.getId())) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    HttpStatus.FORBIDDEN, "Bạn không có quyền xóa sân con của cụm sân khác.");
+        }
         if (court.getFields().size() <= 1) {
             throw new org.springframework.web.server.ResponseStatusException(
                     HttpStatus.CONFLICT, "Mỗi cụm sân cần giữ lại ít nhất 1 sân con.");
@@ -829,22 +1063,48 @@ public class OwnerController {
 
     // ==================== QUẢN LÝ KHO HÀNG (INVENTORY) ====================
 
+    private Set<String> requireOwnedCourtIds(User owner) {
+        return getCourtsForOwner(owner).stream().map(Court::getId).collect(Collectors.toSet());
+    }
+
+    private void assertCourtAccess(Set<String> myCourtIds, String courtId) {
+        if (courtId == null || !myCourtIds.contains(courtId)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Bạn không có quyền thao tác kho của chi nhánh này.");
+        }
+    }
+
+    private void requireInventoryReady() {
+        if (inventoryItemRepository == null || inventoryTransactionRepository == null) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Dịch vụ kho hàng chưa sẵn sàng.");
+        }
+    }
+
     @GetMapping("/inventory")
     public ResponseEntity<ApiResponse<Map<String, Object>>> getInventory(
             @RequestHeader(value = "Authorization", required = false) String authHeader,
             @RequestParam(required = false) String courtId
     ) {
-        requireOwner(authHeader);
+        User owner = requireOwner(authHeader);
+        requireInventoryReady();
+        Set<String> myCourtIds = requireOwnedCourtIds(owner);
+
         String filterCourt = courtId != null && !courtId.isBlank() && !"ALL".equalsIgnoreCase(courtId)
                 ? courtId.trim() : null;
+        if (filterCourt != null) {
+            assertCourtAccess(myCourtIds, filterCourt);
+        }
 
         List<InventoryItem> items = filterCourt != null
                 ? inventoryItemRepository.findByCourtIdAndActiveTrueOrderByNameAsc(filterCourt)
-                : inventoryItemRepository.findByActiveTrueOrderByCourtIdAscNameAsc();
+                : inventoryItemRepository.findByActiveTrueOrderByCourtIdAscNameAsc().stream()
+                        .filter(i -> myCourtIds.contains(i.getCourtId()))
+                        .toList();
 
         List<InventoryTransaction> transactions = filterCourt != null
                 ? inventoryTransactionRepository.findTop50ByCourtIdOrderByCreatedAtDesc(filterCourt)
-                : inventoryTransactionRepository.findTop50ByOrderByCreatedAtDesc();
+                : inventoryTransactionRepository.findTop50ByOrderByCreatedAtDesc().stream()
+                        .filter(tx -> myCourtIds.contains(tx.getCourtId()))
+                        .toList();
 
         long lowStockCount = items.stream().filter(InventoryItem::isLowStock).count();
         long totalValue = items.stream()
@@ -878,11 +1138,16 @@ public class OwnerController {
             @RequestBody Map<String, Object> body
     ) {
         User owner = requireOwner(authHeader);
+        requireInventoryReady();
+        Set<String> myCourtIds = requireOwnedCourtIds(owner);
+
         String name = String.valueOf(body.getOrDefault("name", "")).trim();
         String courtId = String.valueOf(body.getOrDefault("courtId", "")).trim();
         if (name.isEmpty() || courtId.isEmpty()) {
             return ResponseEntity.badRequest().body(ApiResponse.error("Tên mặt hàng và chi nhánh không được để trống."));
         }
+        assertCourtAccess(myCourtIds, courtId);
+
         Court court = courtRepository.findById(courtId).orElse(null);
         if (court == null) {
             return ResponseEntity.badRequest().body(ApiResponse.error("Không tìm thấy chi nhánh: " + courtId));
@@ -934,11 +1199,16 @@ public class OwnerController {
             @RequestHeader(value = "Authorization", required = false) String authHeader,
             @RequestBody Map<String, Object> body
     ) {
-        requireOwner(authHeader);
+        User owner = requireOwner(authHeader);
+        requireInventoryReady();
+        Set<String> myCourtIds = requireOwnedCourtIds(owner);
+
         InventoryItem item = inventoryItemRepository.findById(id).orElse(null);
         if (item == null || !Boolean.TRUE.equals(item.getActive())) {
             return ResponseEntity.status(HttpStatus.NOT_FOUND).body(ApiResponse.error("Không tìm thấy mặt hàng."));
         }
+        assertCourtAccess(myCourtIds, item.getCourtId());
+
         if (body.containsKey("name")) {
             String n = String.valueOf(body.get("name")).trim();
             if (!n.isEmpty()) item.setName(n);
@@ -979,10 +1249,15 @@ public class OwnerController {
             @RequestBody Map<String, Object> body
     ) {
         User owner = requireOwner(authHeader);
+        requireInventoryReady();
+        Set<String> myCourtIds = requireOwnedCourtIds(owner);
+
         InventoryItem item = inventoryItemRepository.findById(id).orElse(null);
         if (item == null || !Boolean.TRUE.equals(item.getActive())) {
             return ResponseEntity.status(HttpStatus.NOT_FOUND).body(ApiResponse.error("Không tìm thấy mặt hàng."));
         }
+        assertCourtAccess(myCourtIds, item.getCourtId());
+
         int quantity = ((Number) body.getOrDefault("quantity", 0)).intValue();
         if (quantity <= 0) {
             return ResponseEntity.badRequest().body(ApiResponse.error("Số lượng nhập kho phải lớn hơn 0."));
@@ -1028,10 +1303,15 @@ public class OwnerController {
             @RequestBody Map<String, Object> body
     ) {
         User owner = requireOwner(authHeader);
+        requireInventoryReady();
+        Set<String> myCourtIds = requireOwnedCourtIds(owner);
+
         InventoryItem item = inventoryItemRepository.findById(id).orElse(null);
         if (item == null || !Boolean.TRUE.equals(item.getActive())) {
             return ResponseEntity.status(HttpStatus.NOT_FOUND).body(ApiResponse.error("Không tìm thấy mặt hàng."));
         }
+        assertCourtAccess(myCourtIds, item.getCourtId());
+
         int newStock = ((Number) body.getOrDefault("newStock", item.getStockQuantity())).intValue();
         if (newStock < 0) {
             return ResponseEntity.badRequest().body(ApiResponse.error("Số lượng tồn mới không được âm."));
@@ -1063,10 +1343,15 @@ public class OwnerController {
             @RequestBody Map<String, Object> body
     ) {
         User owner = requireOwner(authHeader);
+        requireInventoryReady();
+        Set<String> myCourtIds = requireOwnedCourtIds(owner);
+
         InventoryItem item = inventoryItemRepository.findById(id).orElse(null);
         if (item == null || !Boolean.TRUE.equals(item.getActive())) {
             return ResponseEntity.status(HttpStatus.NOT_FOUND).body(ApiResponse.error("Không tìm thấy mặt hàng."));
         }
+        assertCourtAccess(myCourtIds, item.getCourtId());
+
         int quantity = ((Number) body.getOrDefault("quantity", 0)).intValue();
         if (quantity <= 0) {
             return ResponseEntity.badRequest().body(ApiResponse.error("Số lượng xuất hủy phải lớn hơn 0."));
@@ -1116,10 +1401,15 @@ public class OwnerController {
             @RequestBody Map<String, Object> body
     ) {
         User owner = requireOwner(authHeader);
+        requireInventoryReady();
+        Set<String> myCourtIds = requireOwnedCourtIds(owner);
+
         InventoryItem source = inventoryItemRepository.findById(id).orElse(null);
         if (source == null || !Boolean.TRUE.equals(source.getActive())) {
             return ResponseEntity.status(HttpStatus.NOT_FOUND).body(ApiResponse.error("Không tìm thấy mặt hàng nguồn."));
         }
+        assertCourtAccess(myCourtIds, source.getCourtId());
+
         String targetCourtId = String.valueOf(body.getOrDefault("targetCourtId", "")).trim();
         if (targetCourtId.isEmpty()) {
             return ResponseEntity.badRequest().body(ApiResponse.error("Vui lòng chọn chi nhánh nhận hàng."));
@@ -1127,6 +1417,8 @@ public class OwnerController {
         if (targetCourtId.equals(source.getCourtId())) {
             return ResponseEntity.badRequest().body(ApiResponse.error("Chi nhánh nhận phải khác chi nhánh xuất."));
         }
+        assertCourtAccess(myCourtIds, targetCourtId);
+
         Court targetCourt = courtRepository.findById(targetCourtId).orElse(null);
         if (targetCourt == null) {
             return ResponseEntity.badRequest().body(ApiResponse.error("Không tìm thấy chi nhánh nhận: " + targetCourtId));
@@ -1208,9 +1500,15 @@ public class OwnerController {
             @RequestParam(required = false) String courtId,
             @RequestParam(value = "period", required = false, defaultValue = "ALL") String period
     ) {
-        requireOwner(authHeader);
+        User owner = requireOwner(authHeader);
+        requireInventoryReady();
+        Set<String> myCourtIds = requireOwnedCourtIds(owner);
+
         String filterCourt = courtId != null && !courtId.isBlank() && !"ALL".equalsIgnoreCase(courtId)
                 ? courtId.trim() : null;
+        if (filterCourt != null) {
+            assertCourtAccess(myCourtIds, filterCourt);
+        }
         String normalizedPeriod = period != null ? period.trim().toUpperCase() : "ALL";
 
         LocalDate today = LocalDate.now(clock);
@@ -1218,7 +1516,9 @@ public class OwnerController {
         LocalDate weekEnd = weekStart.plusDays(6);
         YearMonth thisMonth = YearMonth.from(today);
 
-        List<InventoryItem> allItems = inventoryItemRepository.findAll();
+        List<InventoryItem> allItems = inventoryItemRepository.findAll().stream()
+                .filter(it -> myCourtIds.contains(it.getCourtId()))
+                .toList();
         Map<String, InventoryItem> itemById = new HashMap<>();
         for (InventoryItem it : allItems) {
             itemById.put(it.getId(), it);
@@ -1226,11 +1526,15 @@ public class OwnerController {
 
         List<InventoryItem> activeItems = filterCourt != null
                 ? inventoryItemRepository.findByCourtIdAndActiveTrueOrderByNameAsc(filterCourt)
-                : inventoryItemRepository.findByActiveTrueOrderByCourtIdAscNameAsc();
+                : inventoryItemRepository.findByActiveTrueOrderByCourtIdAscNameAsc().stream()
+                        .filter(it -> myCourtIds.contains(it.getCourtId()))
+                        .toList();
 
         List<InventoryTransaction> rawTxs = filterCourt != null
                 ? inventoryTransactionRepository.findByCourtIdOrderByCreatedAtDesc(filterCourt)
-                : inventoryTransactionRepository.findByOrderByCreatedAtDesc();
+                : inventoryTransactionRepository.findByOrderByCreatedAtDesc().stream()
+                        .filter(tx -> myCourtIds.contains(tx.getCourtId()))
+                        .toList();
 
         List<InventoryTransaction> txs = rawTxs.stream()
                 .filter(tx -> {
@@ -1439,11 +1743,15 @@ public class OwnerController {
             @PathVariable String id,
             @RequestHeader(value = "Authorization", required = false) String authHeader
     ) {
-        requireOwner(authHeader);
+        User owner = requireOwner(authHeader);
+        requireInventoryReady();
+        Set<String> myCourtIds = requireOwnedCourtIds(owner);
+
         InventoryItem item = inventoryItemRepository.findById(id).orElse(null);
         if (item == null) {
             return ResponseEntity.status(HttpStatus.NOT_FOUND).body(ApiResponse.error("Không tìm thấy mặt hàng."));
         }
+        assertCourtAccess(myCourtIds, item.getCourtId());
         item.setActive(false);
         item.setUpdatedAt(java.time.LocalDateTime.now(clock));
         inventoryItemRepository.save(item);
@@ -1486,6 +1794,28 @@ public class OwnerController {
         return m;
     }
 
+    private static void populateAreaFromAddress(Court court, String address, String explicitCity, String explicitDistrict) {
+        String city = explicitCity != null && !explicitCity.isEmpty() ? explicitCity : null;
+        String district = explicitDistrict != null && !explicitDistrict.isEmpty() ? explicitDistrict : null;
+        if (address != null && address.contains(",")) {
+            String[] parts = address.split(",");
+            if (city == null && parts.length >= 1) {
+                String last = parts[parts.length - 1].trim().toLowerCase().replaceAll("[.\\s]", "");
+                if (last.contains("hanoi") || last.contains("hànội")) city = "Hà Nội";
+                else if (last.contains("hcm") || last.contains("tphcm") || last.contains("hochiminh") || last.contains("hồchíminh")) city = "TP. Hồ Chí Minh";
+            }
+            if (district == null && parts.length >= 2) {
+                String distRaw = parts[parts.length - 2].trim();
+                String stripped = distRaw.replaceFirst("(?i)^(?:quận\\s+|huyện\\s+|thị xã\\s+|thành phố\\s+|tp\\.?\\s*|[qh]\\.\\s*)", "").trim();
+                if (!stripped.isEmpty()) {
+                    district = stripped.chars().allMatch(Character::isDigit) ? "Quận " + stripped : stripped;
+                }
+            }
+        }
+        if (city != null) court.setCity(city);
+        if (district != null) court.setDistrict(district);
+    }
+
     private static String resolveFieldTypeCode(String detail) {
         if (detail == null) return "5_VS_5";
         if (detail.contains("7")) return "7_VS_7";
@@ -1497,6 +1827,75 @@ public class OwnerController {
         LocalDate parsed = ShiftPlanningService.parseDateOrNull(StaffController.extractDate(b.getDateLabel()));
         if (parsed != null) return parsed;
         return b.getCreatedAt() != null ? b.getCreatedAt().toLocalDate() : null;
+    }
+
+    // =========================================================================
+    // QUẢN LÝ YÊU CẦU LỊCH CỐ ĐỊNH (THỜI TIẾT / HOÀN VÍ / DUYỆT NGOẠI LỆ)
+    // =========================================================================
+
+    @GetMapping("/recurring-requests")
+    public ResponseEntity<ApiResponse<List<SessionChangeRequest>>> getRecurringRequests(
+            @RequestHeader(value = "Authorization", required = false) String authHeader
+    ) {
+        User owner = requireOwner(authHeader);
+        if (recurringBookingService == null) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Dịch vụ lịch cố định chưa sẵn sàng.");
+        }
+        Set<String> myCourtIds = getCourtsForOwner(owner).stream().map(Court::getId).collect(Collectors.toSet());
+        return ResponseEntity.ok(ApiResponse.success(
+                "Danh sách yêu cầu lịch cố định",
+                recurringBookingService.getChangeRequestsForOwnerCourts(myCourtIds)
+        ));
+    }
+
+    @GetMapping("/recurring-sessions")
+    public ResponseEntity<ApiResponse<List<Map<String, Object>>>> getRecurringSessions(
+            @RequestHeader(value = "Authorization", required = false) String authHeader
+    ) {
+        User owner = requireOwner(authHeader);
+        if (recurringBookingService == null) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Dịch vụ lịch cố định chưa sẵn sàng.");
+        }
+        Set<String> myCourtIds = getCourtsForOwner(owner).stream().map(Court::getId).collect(Collectors.toSet());
+        return ResponseEntity.ok(ApiResponse.success(
+                "Danh sách buổi lịch cố định sắp diễn ra",
+                recurringBookingService.getActiveRecurringSessionsForOwnerCourts(myCourtIds)
+        ));
+    }
+
+    @PostMapping("/recurring-requests/{id}/resolve")
+    public ResponseEntity<ApiResponse<Map<String, Object>>> resolveRecurringRequest(
+            @PathVariable String id,
+            @RequestHeader(value = "Authorization", required = false) String authHeader,
+            @RequestBody RecurringDtos.OwnerResolveChangeRequest request
+    ) {
+        User owner = requireOwner(authHeader);
+        if (recurringBookingService == null) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Dịch vụ lịch cố định chưa sẵn sàng.");
+        }
+        Set<String> myCourtIds = getCourtsForOwner(owner).stream().map(Court::getId).collect(Collectors.toSet());
+        return ResponseEntity.ok(ApiResponse.success(
+                "Đã xử lý yêu cầu lịch cố định",
+                recurringBookingService.ownerResolveChangeRequest(id, request, owner, myCourtIds)
+        ));
+    }
+
+    @PostMapping("/recurring-sessions/{id}/weather-postpone")
+    public ResponseEntity<ApiResponse<Map<String, Object>>> ownerWeatherPostpone(
+            @PathVariable String id,
+            @RequestHeader(value = "Authorization", required = false) String authHeader,
+            @RequestBody(required = false) Map<String, String> body
+    ) {
+        User owner = requireOwner(authHeader);
+        if (recurringBookingService == null) {
+            throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Dịch vụ lịch cố định chưa sẵn sàng.");
+        }
+        Set<String> myCourtIds = getCourtsForOwner(owner).stream().map(Court::getId).collect(Collectors.toSet());
+        String note = body != null ? body.get("ownerNote") : null;
+        return ResponseEntity.ok(ApiResponse.success(
+                "Đã hoãn buổi cố định do thời tiết",
+                recurringBookingService.ownerProactiveWeatherPostpone(id, note, owner, myCourtIds)
+        ));
     }
 
     private static boolean matchesPeriod(

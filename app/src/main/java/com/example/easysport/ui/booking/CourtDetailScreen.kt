@@ -24,6 +24,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.AccountBalanceWallet
 import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.Favorite
 import androidx.compose.material.icons.outlined.FavoriteBorder
@@ -65,12 +66,20 @@ import androidx.compose.ui.unit.sp
 import com.example.easysport.data.model.BookingRequest
 import com.example.easysport.data.model.Court
 import com.example.easysport.data.model.PaymentMethod
+import com.example.easysport.data.model.RecurringCheckoutResult
+import com.example.easysport.data.model.RecurringPackagePreview
 import com.example.easysport.data.model.Session
 import com.example.easysport.data.model.TimeSlot
 import com.example.easysport.data.model.SlotAvailabilityStatus
 import com.example.easysport.data.remote.PaymentApiClient
+import com.example.easysport.data.remote.RecurringApiClient
+import com.example.easysport.data.remote.WalletApiClient
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.launch
+import java.util.UUID
 import com.example.easysport.data.repository.UserStore
 import com.example.easysport.data.repository.SampleData
 import com.example.easysport.ui.common.EsColors
@@ -86,11 +95,13 @@ fun CourtDetailScreen(
     court: Court,
     onBack: () -> Unit,
     onConfirm: (BookingRequest) -> Unit,
+    onRecurringConfirm: (RecurringCheckoutResult) -> Unit = {},
     defaultName: String = "",
     defaultPhone: String = "",
     /** Các ca chọn sẵn (theo label, ví dụ "18:00 - 19:30"). */
     initialSelected: Set<String> = emptySet(),
 ) {
+    val scope = rememberCoroutineScope()
     var favorite by remember { mutableStateOf(false) }
     val fieldOptions = remember(court) {
         court.fields
@@ -103,10 +114,30 @@ fun CourtDetailScreen(
     var name by remember(initialName) { mutableStateOf(initialName) }
     var phone by remember(initialPhone) { mutableStateOf(initialPhone) }
     var method by remember { mutableStateOf(PaymentMethod.QR_TRANSFER) }
+    var isRecurring by remember { mutableStateOf(false) }
+    var walletBalance by remember { mutableStateOf<Int?>(null) }
+    var recurringPreview by remember { mutableStateOf<RecurringPackagePreview?>(null) }
+    var recurringPreviewLoading by remember { mutableStateOf(false) }
+    var recurringPreviewError by remember { mutableStateOf<String?>(null) }
+    var isStartingRecurring by remember { mutableStateOf(false) }
+    var recurringCheckoutError by remember { mutableStateOf<String?>(null) }
 
-    var dateEpoch by androidx.compose.runtime.saveable.rememberSaveable { androidx.compose.runtime.mutableLongStateOf(java.time.LocalDate.now().toEpochDay()) }
+    var dateEpoch by androidx.compose.runtime.saveable.rememberSaveable { mutableLongStateOf(java.time.LocalDate.now().toEpochDay()) }
     val rentalDate = java.time.LocalDate.ofEpochDay(dateEpoch)
     val dateLabel = rentalDate.format(java.time.format.DateTimeFormatter.ofPattern("dd/MM/yyyy"))
+    val recurringIdemKey = remember(court.id, fieldIndex, dateEpoch, selectedLabels, method, isRecurring) {
+        UUID.randomUUID().toString()
+    }
+
+    LaunchedEffect(Unit) {
+        WalletApiClient.getMyWallet().onSuccess { walletBalance = it.balance }
+    }
+
+    LaunchedEffect(isRecurring) {
+        if (isRecurring && method == PaymentMethod.CASH_ON_SITE) {
+            method = PaymentMethod.QR_TRANSFER
+        }
+    }
 
     // ----- Tính tiền theo ca đã chọn -----
     var liveSlots by remember { mutableStateOf(emptyList<TimeSlot>()) }
@@ -150,7 +181,40 @@ fun CourtDetailScreen(
     val total = selectedSlots.sumOf { court.sessionPrices[it.session] ?: 0 }
     val deposit = total * DEPOSIT_PERCENT / 100
     val hoursText = if (shiftCount % 2 == 0) "${shiftCount * 3 / 2}h" else "${shiftCount * 3 / 2}.5h"
-    val canConfirm = availabilityReady && name.isNotBlank() && phone.matches(Regex("[+0-9]{9,15}")) && shiftCount > 0
+    val payableAmount = if (isRecurring) (recurringPreview?.totalPrice ?: 0) else if (method == PaymentMethod.CASH_ON_SITE) deposit else total
+    val walletEnough = method != PaymentMethod.WALLET || (walletBalance != null && walletBalance!! >= payableAmount && payableAmount > 0)
+    val canConfirm = !isStartingRecurring && availabilityReady && name.isNotBlank() && phone.matches(Regex("[+0-9]{9,15}")) && shiftCount > 0 && walletEnough && (!isRecurring || (recurringPreview?.allAvailable == true && !recurringPreviewLoading))
+
+    LaunchedEffect(isRecurring, court.id, fieldIndex, dateLabel, selectedLabels, availabilityReady) {
+        recurringCheckoutError = null
+        if (!isRecurring) {
+            recurringPreview = null
+            recurringPreviewError = null
+            return@LaunchedEffect
+        }
+        val field = fieldOptions.getOrNull(fieldIndex) ?: return@LaunchedEffect
+        val chosen = liveSlots.filter { it.label in selectedLabels && it.isAvailable }.map { it.label }
+        if (chosen.isEmpty()) {
+            recurringPreview = null
+            recurringPreviewError = null
+            return@LaunchedEffect
+        }
+        recurringPreviewLoading = true
+        recurringPreviewError = null
+        RecurringApiClient.previewPackage(
+            courtId = court.id,
+            fieldDetail = field.detail.ifBlank { field.id },
+            startDate = dateLabel,
+            slots = chosen,
+        ).onSuccess { res ->
+            recurringPreview = res
+            if (res.walletBalance != null) walletBalance = res.walletBalance
+        }.onFailure { err ->
+            recurringPreview = null
+            recurringPreviewError = err.localizedMessage ?: "Không kiểm tra được lịch 12 buổi"
+        }
+        recurringPreviewLoading = false
+    }
 
     Column(
         Modifier
@@ -224,12 +288,21 @@ fun CourtDetailScreen(
 
             // ----- Giờ thuê: nhóm theo buổi, chọn nhiều ca -----
             Spacer(Modifier.height(24.dp))
-            EsSectionTitle("Giờ thuê")
+            EsSectionTitle(if (isRecurring) "Chọn chế độ & lịch cố định" else "Giờ thuê")
             Spacer(Modifier.height(10.dp))
+            BookingModeSegmentedToggle(isRecurring = isRecurring, onChange = { isRecurring = it })
+            Spacer(Modifier.height(12.dp))
             RentalDateButton(rentalDate) { dateEpoch = it.toEpochDay(); selectedLabels = emptySet() }
             Spacer(Modifier.height(16.dp))
             FootballTimePicker(liveSlots, selectedLabels) { selectedLabels = it }
-            if (shiftCount > 0) {
+            if (isRecurring && shiftCount > 0) {
+                Spacer(Modifier.height(16.dp))
+                RecurringPackagePreviewPanel(
+                    preview = recurringPreview,
+                    isLoading = recurringPreviewLoading,
+                    errorMessage = recurringPreviewError,
+                )
+            } else if (shiftCount > 0) {
                 Spacer(Modifier.height(16.dp))
                 Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(16.dp)).background(EsColors.SurfaceTint).padding(16.dp)) {
                     val slotsSummary = selectedSlots.joinToString(", ") { it.label }
@@ -258,17 +331,34 @@ fun CourtDetailScreen(
             Spacer(Modifier.height(12.dp))
             PaymentOption(
                 icon = Icons.Outlined.QrCode2,
-                text = "Thanh toán tiền cọc và tiền sân qua mã QR",
+                text = if (isRecurring) "Thanh toán trọn gói 12 buổi qua mã QR (SePay)" else "Thanh toán tiền cọc và tiền sân qua mã QR",
                 selected = method == PaymentMethod.QR_TRANSFER,
                 onClick = { method = PaymentMethod.QR_TRANSFER },
             )
+            if (!isRecurring) {
+                Spacer(Modifier.height(12.dp))
+                PaymentOption(
+                    icon = Icons.Outlined.Payments,
+                    text = "Thanh toán tiền cọc qua mã QR và tiền sân khi nhận sân",
+                    selected = method == PaymentMethod.CASH_ON_SITE,
+                    onClick = { method = PaymentMethod.CASH_ON_SITE },
+                )
+            }
             Spacer(Modifier.height(12.dp))
             PaymentOption(
-                icon = Icons.Outlined.Payments,
-                text = "Thanh toán tiền cọc qua mã QR và tiền sân khi nhận sân",
-                selected = method == PaymentMethod.CASH_ON_SITE,
-                onClick = { method = PaymentMethod.CASH_ON_SITE },
+                icon = Icons.Outlined.AccountBalanceWallet,
+                text = "Ví EasySport · Số dư: ${(walletBalance ?: 0).vnd()} đ",
+                selected = method == PaymentMethod.WALLET,
+                onClick = { method = PaymentMethod.WALLET },
             )
+            if (method == PaymentMethod.WALLET && !walletEnough && payableAmount > 0) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "Số dư Ví chưa đủ (${(walletBalance ?: 0).vnd()} đ / cần ${payableAmount.vnd()} đ). Vui lòng chọn SePay QR.",
+                    color = EsColors.Danger,
+                    fontSize = 12.sp,
+                )
+            }
 
             // ----- Tổng kết -----
             Spacer(Modifier.height(16.dp))
@@ -279,48 +369,104 @@ fun CourtDetailScreen(
                     .background(EsColors.SurfaceTint)
                     .padding(16.dp),
             ) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("Tổng tiền ($shiftCount ca · $hoursText):", color = EsColors.Title, fontSize = 15.sp)
-                    Text("${total.vnd()} đ", color = EsColors.Title, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                if (isRecurring) {
+                    val recUnit = recurringPreview?.unitPrice ?: total
+                    val recTotal = recurringPreview?.totalPrice ?: (total * 12)
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Giá mỗi buổi ($shiftCount ca · $hoursText):", color = EsColors.Title, fontSize = 14.5.sp)
+                        Text("${recUnit.vnd()} đ", color = EsColors.Title, fontSize = 14.5.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    HorizontalDivider(color = EsColors.Border)
+                    Spacer(Modifier.height(10.dp))
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("Tổng thanh toán (12 buổi):", color = EsColors.Primary, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                        Text("${recTotal.vnd()} đ", color = EsColors.Primary, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                    }
+                } else {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("Tổng tiền ($shiftCount ca · $hoursText):", color = EsColors.Title, fontSize = 15.sp)
+                        Text("${total.vnd()} đ", color = EsColors.Title, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    HorizontalDivider(color = EsColors.Border)
+                    Spacer(Modifier.height(12.dp))
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            if (method == PaymentMethod.CASH_ON_SITE) "Tiền đặt cọc ($DEPOSIT_PERCENT%):" else "Thanh toán ngay:",
+                            color = EsColors.Primary,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Text(
+                            "${(if (method == PaymentMethod.CASH_ON_SITE) deposit else total).vnd()} đ",
+                            color = EsColors.Primary,
+                            fontSize = 20.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                 }
-                Spacer(Modifier.height(12.dp))
-                HorizontalDivider(color = EsColors.Border)
-                Spacer(Modifier.height(12.dp))
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        "Tiền đặt cọc ($DEPOSIT_PERCENT%):",
-                        color = EsColors.Primary,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Bold,
-                    )
-                    Text("${deposit.vnd()} đ", color = EsColors.Primary, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                }
+            }
+
+            if (recurringCheckoutError != null) {
+                Spacer(Modifier.height(8.dp))
+                Text(recurringCheckoutError ?: "", color = EsColors.Danger, fontSize = 13.sp, fontWeight = FontWeight.Medium)
             }
 
             Spacer(Modifier.height(16.dp))
             EsPrimaryButton(
-                text = "Thanh toán",
+                text = when {
+                    isStartingRecurring -> "Đang giữ 12 buổi..."
+                    isRecurring -> "Thanh toán gói cố định 12 buổi"
+                    else -> "Thanh toán"
+                },
                 trailingIcon = Icons.AutoMirrored.Rounded.ArrowForward,
                 enabled = canConfirm,
                 modifier = Modifier.fillMaxWidth(),
                 onClick = {
-                    onConfirm(
-                        BookingRequest(
-                            courtId = court.id,
-                            field = fieldOptions[fieldIndex],
-                            slots = selectedSlots,
-                            dateLabel = dateLabel,
-                            customerName = name.trim(),
-                            phone = phone.trim(),
-                            paymentMethod = method,
-                            total = total,
-                            deposit = deposit,
+                    if (!isRecurring) {
+                        onConfirm(
+                            BookingRequest(
+                                courtId = court.id,
+                                field = fieldOptions[fieldIndex],
+                                slots = selectedSlots,
+                                dateLabel = dateLabel,
+                                customerName = name.trim(),
+                                phone = phone.trim(),
+                                paymentMethod = method,
+                                total = total,
+                                deposit = if (method == PaymentMethod.CASH_ON_SITE) deposit else total,
+                            )
                         )
-                    )
+                    } else {
+                        scope.launch {
+                            isStartingRecurring = true
+                            recurringCheckoutError = null
+                            RecurringApiClient.startRecurringCheckout(
+                                courtId = court.id,
+                                fieldDetail = fieldOptions[fieldIndex].detail.ifBlank { fieldOptions[fieldIndex].id },
+                                startDate = dateLabel,
+                                slots = selectedSlots.map { it.label },
+                                paymentMethod = method.name,
+                                customerName = name.trim(),
+                                customerPhone = phone.trim(),
+                                idempotencyKey = recurringIdemKey,
+                            ).onSuccess { res ->
+                                onRecurringConfirm(res)
+                            }.onFailure { err ->
+                                recurringCheckoutError = err.localizedMessage ?: "Không thể giữ gói cố định. Vui lòng kiểm tra lại lịch."
+                            }
+                            isStartingRecurring = false
+                        }
+                    }
                 },
             )
             Spacer(Modifier.height(24.dp))

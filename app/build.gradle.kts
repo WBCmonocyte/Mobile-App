@@ -20,7 +20,7 @@ val mapsApiKey: String = System.getenv("MAPS_API_KEY")
 val apiBaseUrl: String = (System.getenv("API_BASE_URL")
     ?: localProperties.getProperty("API_BASE_URL")
     ?: localProperties.getProperty("api.base.url")
-    ?: "http://10.0.2.2:8080").trimEnd('/')
+    ?: "https://backend-production-df0d4e10.up.railway.app").trimEnd('/')
 
 android {
     namespace = "com.example.easysport"

@@ -64,3 +64,4 @@ class NetworkAuthRepository : AuthRepository {
         val instance: NetworkAuthRepository by lazy { NetworkAuthRepository() }
     }
 }
+

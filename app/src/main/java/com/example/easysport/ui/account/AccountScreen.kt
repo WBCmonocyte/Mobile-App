@@ -11,8 +11,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.HelpOutline
 import androidx.compose.material.icons.automirrored.outlined.Logout
+import androidx.compose.material.icons.outlined.AccountBalanceWallet
 import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.Edit
+import androidx.compose.material.icons.outlined.EventRepeat
 import androidx.compose.material.icons.outlined.Shield
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material3.*
@@ -42,6 +44,8 @@ fun AccountScreen(
     onTabSelected: (HomeTab) -> Unit = {},
     onLogout: () -> Unit = {},
     onOpenBooking: (String) -> Unit = {},
+    onOpenWallet: () -> Unit = {},
+    onOpenRecurring: () -> Unit = {},
 ) {
     val currentUser = user ?: remember {
         User(
@@ -89,6 +93,8 @@ fun AccountScreen(
             Spacer(Modifier.height(24.dp))
             AccountSection(
                 onOpenBookings = { showBookingsDialog = true },
+                onOpenWallet = onOpenWallet,
+                onOpenRecurring = onOpenRecurring,
                 onOpenSecurity = { showSecurityDialog = true },
                 onOpenHelp = { showHelpDialog = true },
             )
@@ -359,6 +365,8 @@ private fun InfoRow(label: String, value: String, isBold: Boolean = false) {
 @Composable
 private fun AccountSection(
     onOpenBookings: () -> Unit,
+    onOpenWallet: () -> Unit,
+    onOpenRecurring: () -> Unit,
     onOpenSecurity: () -> Unit,
     onOpenHelp: () -> Unit,
 ) {
@@ -378,6 +386,18 @@ private fun AccountSection(
             border = BorderStroke(1.dp, Color(0xFFF1F5F9)),
         ) {
             Column(Modifier.padding(horizontal = 6.dp, vertical = 4.dp)) {
+                AccountMenuItem(
+                    icon = Icons.Outlined.AccountBalanceWallet,
+                    title = "Ví EasySport",
+                    onClick = onOpenWallet,
+                )
+                HorizontalDivider(color = Color(0xFFEEF2F6), modifier = Modifier.padding(horizontal = 14.dp))
+                AccountMenuItem(
+                    icon = Icons.Outlined.EventRepeat,
+                    title = "Lịch cố định của tôi",
+                    onClick = onOpenRecurring,
+                )
+                HorizontalDivider(color = Color(0xFFEEF2F6), modifier = Modifier.padding(horizontal = 14.dp))
                 AccountMenuItem(
                     icon = Icons.Outlined.CalendarMonth,
                     title = "Lịch đặt sân của tôi",
