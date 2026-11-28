@@ -36,6 +36,23 @@ public class MailjetSender implements EmailVerificationSender {
     }
 
     public void sendRegistrationCode(String email, String code) {
+        sendCode(email, code, "Xác minh đăng ký EasySport");
+    }
+
+    public void sendResetCode(String email, String code) {
+        sendCode(email, code, "Đặt lại mật khẩu EasySport");
+    }
+
+    private void sendCode(String email, String code, String title) {
+        String hint = "Mã có hiệu lực trong 5 phút và chỉ dùng một lần. Vui lòng giữ mã này cho riêng bạn.";
+        String html = """
+            <div lang="vi" style="background:#eff4f8;padding:24px;font-family:Arial,sans-serif;color:#173553">
+              <div style="max-width:440px;margin:auto"><strong>EasySport</strong>
+              <div style="background:white;border-radius:16px;padding:28px;text-align:center;margin-top:16px">
+              <h2>%s</h2><p style="line-height:1.5">%s</p>
+              <p dir="ltr" style="font-size:36px;font-weight:bold;letter-spacing:3px">%s&#160;%s</p>
+              <small>Nếu bạn không yêu cầu mã này, hãy bỏ qua email.</small></div></div></div>
+            """.formatted(title, hint, code.substring(0, 3), code.substring(3));
         if (apiKey.isBlank() || secret.isBlank() || sender.isBlank()) {
             throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE, "Hệ thống chưa cấu hình gửi email.");
         }
@@ -44,8 +61,9 @@ public class MailjetSender implements EmailVerificationSender {
             String body = json.writeValueAsString(Map.of("Messages", List.of(Map.of(
                     "From", Map.of("Email", sender, "Name", "EasySport"),
                     "To", List.of(Map.of("Email", email)),
-                    "Subject", "EasySport - Mã xác nhận đăng ký",
-                    "TextPart", "Mã xác nhận EasySport của bạn là " + code + ". Mã có hiệu lực trong 5 phút."
+                    "Subject", title,
+                    "TextPart", title + ": " + code + ". " + hint,
+                    "HTMLPart", html
             ))));
             HttpRequest request = HttpRequest.newBuilder(URI.create("https://api.mailjet.com/v3.1/send"))
                     .timeout(Duration.ofSeconds(7))

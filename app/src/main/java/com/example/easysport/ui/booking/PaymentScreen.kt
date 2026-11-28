@@ -291,6 +291,30 @@ fun PaymentScreen(
                 serverTotal = checkoutResult.totalPrice
                 serverDeposit = checkoutResult.depositAmount
                 serverRemaining = checkoutResult.remainingAmount
+
+                if (checkoutResult.holdStatus == "CONFIRMED" || request.paymentMethod == PaymentMethod.WALLET) {
+                    holdPhaseStr = "CONFIRMED"
+                    paymentStatusStr = "PAID"
+                    BookingStore.refresh()
+                    onPaymentSuccess(
+                        Booking(
+                            id = checkoutResult.bookingId,
+                            courtId = court.id,
+                            courtName = court.name,
+                            fieldDetail = request.field.detail,
+                            timeRange = request.slots.joinToString(", ") { it.label },
+                            dateLabel = request.dateLabel,
+                            totalPrice = checkoutResult.totalPrice,
+                            payment = PaymentStatus.PAID,
+                            address = court.address,
+                            depositAmount = checkoutResult.depositAmount,
+                            remainingAmount = 0,
+                            paymentMethod = PaymentMethod.WALLET,
+                        )
+                    )
+                    return@launch
+                }
+
                 hasLaunchedCheckout = true
                 paymentStatusStr = "PENDING"
 
@@ -400,7 +424,7 @@ fun PaymentScreen(
                     )
                 }
             } else {
-                val fullPayment = request.paymentMethod == PaymentMethod.QR_TRANSFER
+                val fullPayment = request.paymentMethod == PaymentMethod.QR_TRANSFER || request.paymentMethod == PaymentMethod.WALLET
                 val effectiveTotal = serverTotal ?: request.total
                 val effectiveDeposit = serverDeposit ?: request.deposit
                 val effectiveRemaining = serverRemaining ?: if (fullPayment) 0 else (effectiveTotal - effectiveDeposit)
@@ -719,7 +743,7 @@ fun PaymentScreen(
                             else -> {
                                 // Chưa mở SePay -> Nút chính giành giữ sân & mở Checkout
                                 EsPrimaryButton(
-                                    text = if (isLoading) "Đang giữ sân & kết nối..." else "Thanh toán qua SePay",
+                                    text = if (isLoading) "Đang xử lý thanh toán..." else if (request.paymentMethod == PaymentMethod.WALLET) "Thanh toán bằng Ví EasySport" else "Thanh toán qua SePay",
                                     trailingIcon = Icons.AutoMirrored.Rounded.ArrowForward,
                                     enabled = !isLoading,
                                     modifier = Modifier.fillMaxWidth(),

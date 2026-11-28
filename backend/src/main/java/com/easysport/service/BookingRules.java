@@ -21,11 +21,15 @@ public final class BookingRules {
     }
 
     public static List<String> validateSlots(List<String> slots, LocalDate date, Clock clock) {
+        return validateSlots(slots, date, clock, 90);
+    }
+
+    public static List<String> validateSlots(List<String> slots, LocalDate date, Clock clock, int maxAdvanceDays) {
         if (slots == null || slots.isEmpty() || slots.size() > SLOTS.size())
             throw new IllegalArgumentException("Vui lòng chọn khung giờ hợp lệ.");
         LocalDateTime now = LocalDateTime.ofInstant(clock.instant(), ZONE);
-        if (date.isBefore(now.toLocalDate()) || date.isAfter(now.toLocalDate().plusDays(90)))
-            throw new IllegalArgumentException("Chỉ được đặt sân trong 90 ngày tới.");
+        if (date.isBefore(now.toLocalDate()) || date.isAfter(now.toLocalDate().plusDays(maxAdvanceDays)))
+            throw new IllegalArgumentException("Chỉ được đặt sân trong " + maxAdvanceDays + " ngày tới.");
         List<String> normalized = slots.stream().map(s -> s == null ? "" : s.trim()).sorted().toList();
         if (new HashSet<>(normalized).size() != normalized.size() || !SLOTS.containsAll(normalized))
             throw new IllegalArgumentException("Ca thuê không hợp lệ hoặc bị trùng.");

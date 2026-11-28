@@ -6,6 +6,7 @@ import com.easysport.entity.Court;
 import com.easysport.entity.InventoryItem;
 import com.easysport.entity.InventoryTransaction;
 import com.easysport.entity.PosSale;
+import com.easysport.entity.RecurringPackage;
 import com.easysport.entity.ShiftReport;
 import com.easysport.entity.User;
 import com.easysport.entity.UserSession;
@@ -14,6 +15,7 @@ import com.easysport.repository.CourtRepository;
 import com.easysport.repository.InventoryItemRepository;
 import com.easysport.repository.InventoryTransactionRepository;
 import com.easysport.repository.PosSaleRepository;
+import com.easysport.repository.RecurringPackageRepository;
 import com.easysport.repository.ShiftReportRepository;
 import com.easysport.repository.StaffShiftRepository;
 import com.easysport.repository.UserRepository;
@@ -29,6 +31,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -49,6 +52,7 @@ class OwnerControllerTest {
     private StaffShiftRepository staffShiftRepository;
     private ShiftReportRepository shiftReportRepository;
     private PosSaleRepository posSaleRepository;
+    private RecurringPackageRepository recurringPackageRepository;
     private InventoryItemRepository inventoryItemRepository;
     private InventoryTransactionRepository inventoryTransactionRepository;
     private OwnerController controller;
@@ -64,6 +68,7 @@ class OwnerControllerTest {
         staffShiftRepository = mock(StaffShiftRepository.class);
         shiftReportRepository = mock(ShiftReportRepository.class);
         posSaleRepository = mock(PosSaleRepository.class);
+        recurringPackageRepository = mock(RecurringPackageRepository.class);
         inventoryItemRepository = mock(InventoryItemRepository.class);
         inventoryTransactionRepository = mock(InventoryTransactionRepository.class);
 
@@ -79,9 +84,11 @@ class OwnerControllerTest {
                 posSaleRepository,
                 userRepository,
                 shiftPlanningService,
+                clock,
+                recurringPackageRepository,
+                null,
                 inventoryItemRepository,
-                inventoryTransactionRepository,
-                clock
+                inventoryTransactionRepository
         );
 
         owner = new User("own1", "0988776655", "hash", "Trần Chủ Sân", "owner@es.vn", "HCM", "OWNER");
@@ -297,6 +304,8 @@ class OwnerControllerTest {
 
     @Test
     void restockAndAdjustInventoryUpdatesStockAndLogsTransaction() {
+        Court c1 = new Court("c1", "Sân Thành Phát", "HCM", 4.8, 10, 1.0, 300000, 150000, 250000, 300000, "img");
+        when(courtRepository.findAll()).thenReturn(List.of(c1));
         InventoryItem item = new InventoryItem(
                 "inv_1", "c1", "Sân Thành Phát", "Revive", "DRINK", "chai", 8000, 15000, 10, 12
         );
@@ -322,10 +331,13 @@ class OwnerControllerTest {
 
     @Test
     void wastageInventoryItemDeductsStockAndLogsTransaction() {
+        Court c1 = new Court("c1", "Sân Thành Phát", "HCM", 4.8, 10, 1.0, 300000, 150000, 250000, 300000, "img");
+        when(courtRepository.findAll()).thenReturn(List.of(c1));
         InventoryItem item = new InventoryItem(
                 "inv_w", "c1", "Sân Thành Phát", "Nước suối", "DRINK", "chai", 4000, 10000, 15, 5
         );
         when(inventoryItemRepository.findById("inv_w")).thenReturn(Optional.of(item));
+        when(inventoryItemRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         ResponseEntity<ApiResponse<Map<String, Object>>> okRes = controller.wastageInventoryItem(
                 "inv_w",
@@ -350,8 +362,10 @@ class OwnerControllerTest {
                 "inv_src", "c1", "Sân Thành Phát", "Revive", "DRINK", "chai", 8500, 15000, 40, 10
         );
         src.setSku("REV-330");
+        Court c1 = new Court("c1", "Sân Thành Phát", "HCM", 4.8, 10, 1.0, 300000, 150000, 250000, 300000, "img");
         Court destCourt = new Court("c2", "Sân Hoàng Gia", "HCM", 4.9, 10, 1.0, 300000, 150000, 250000, 300000, "img");
 
+        when(courtRepository.findAll()).thenReturn(List.of(c1, destCourt));
         when(inventoryItemRepository.findById("inv_src")).thenReturn(Optional.of(src));
         when(courtRepository.findById("c2")).thenReturn(Optional.of(destCourt));
         when(inventoryItemRepository.findByCourtIdAndActiveTrue("c2")).thenReturn(List.of());
@@ -377,6 +391,8 @@ class OwnerControllerTest {
 
     @Test
     void getInventoryStatsComputesRevenueProfitWastageAndSuggestions() {
+        Court c1 = new Court("c1", "Sân Thành Phát", "HCM", 4.8, 10, 1.0, 300000, 150000, 250000, 300000, "img");
+        when(courtRepository.findAll()).thenReturn(List.of(c1));
         InventoryItem item1 = new InventoryItem(
                 "inv_1", "c1", "Sân Thành Phát", "Revive", "DRINK", "chai", 8500, 15000, 40, 10
         );
@@ -414,5 +430,97 @@ class OwnerControllerTest {
         assertEquals(1, suggestions.size());
         List<?> topSelling = (List<?>) stats.get("topSelling");
         assertEquals(1, topSelling.size());
+    }
+
+    @Test
+    void inventoryEndpointsRejectCrossOwnerCourtAccess() {
+        Court ownedCourt = new Court("c1", "Sân Thành Phát", "HCM", 4.8, 10, 1.0, 300000, 150000, 250000, 300000, "img");
+        ownedCourt.setOwnerId("own1");
+        Court foreignCourt = new Court("c_other", "Sân Khác", "HN", 4.5, 5, 1.0, 250000, 150000, 200000, 250000, "img");
+        foreignCourt.setOwnerId("own2");
+        when(courtRepository.findAll()).thenReturn(List.of(ownedCourt, foreignCourt));
+        when(courtRepository.findById("c_other")).thenReturn(Optional.of(foreignCourt));
+
+        InventoryItem foreignItem = new InventoryItem(
+                "inv_other", "c_other", "Sân Khác", "Nước suối", "DRINK", "chai", 4000, 10000, 20, 5
+        );
+        when(inventoryItemRepository.findById("inv_other")).thenReturn(Optional.of(foreignItem));
+
+        InventoryItem ownSrc = new InventoryItem(
+                "inv_own", "c1", "Sân Thành Phát", "Revive", "DRINK", "chai", 8500, 15000, 30, 5
+        );
+        when(inventoryItemRepository.findById("inv_own")).thenReturn(Optional.of(ownSrc));
+
+        ResponseStatusException readEx = assertThrows(ResponseStatusException.class, () ->
+                controller.getInventory("Bearer tok_owner", "c_other"));
+        assertEquals(403, readEx.getStatusCode().value());
+
+        ResponseStatusException restockEx = assertThrows(ResponseStatusException.class, () ->
+                controller.restockInventoryItem("inv_other", "Bearer tok_owner", Map.of("quantity", 5)));
+        assertEquals(403, restockEx.getStatusCode().value());
+
+        ResponseStatusException transferEx = assertThrows(ResponseStatusException.class, () ->
+                controller.transferInventoryItem("inv_own", "Bearer tok_owner", Map.of("targetCourtId", "c_other", "quantity", 5)));
+        assertEquals(403, transferEx.getStatusCode().value());
+    }
+
+    @Test
+    void overviewWithRecurringPackageDoesNotDoubleCountSessionsInCourtOrFieldRevenue() {
+        Court court = new Court("c1", "Sân Thành Phát", "HCM", 4.8, 10, 1.0, 300000, 150000, 250000, 300000, "img");
+        court.setOwnerId("own1");
+        when(courtRepository.findAll()).thenReturn(List.of(court));
+
+        RecurringPackage pkg = new RecurringPackage();
+        pkg.setId("pkg_1");
+        pkg.setUserId("u1");
+        pkg.setCourtId("c1");
+        pkg.setCourtName("Sân Thành Phát");
+        pkg.setFieldId("f1");
+        pkg.setFieldDetail("Sân 5 - A");
+        pkg.setTimeRange("18:00 - 19:00");
+        pkg.setTotalPrice(1200000);
+        pkg.setTotalPaid(1200000);
+        pkg.setTotalRefunded(0);
+        pkg.setPaymentMethod("WALLET");
+        pkg.setStatus("ACTIVE");
+        pkg.setCreatedAt(LocalDateTime.now(clock));
+
+        List<Booking> bookings = new ArrayList<>();
+        for (int i = 1; i <= 12; i++) {
+            Booking sb = new Booking(
+                    "b_rec_" + i, "u1", "c1", "Sân Thành Phát", "Sân 5 - A",
+                    "18:00 - 19:00", "24/11/2026", 100000, 100000, 0,
+                    i == 1 ? "CASH_ON_SITE" : "WALLET",
+                    i == 1 ? "COMPLETED" : "PAID",
+                    "Khách Cố Định", "0903", "HCM", LocalDateTime.now(clock)
+            );
+            sb.setRecurringPackageId("pkg_1");
+            if (i == 1) {
+                sb.setServiceAmount(50000);
+            }
+            bookings.add(sb);
+        }
+
+        when(bookingRepository.findAllByOrderByCreatedAtDesc()).thenReturn(bookings);
+        when(posSaleRepository.findAllByOrderByCreatedAtDesc()).thenReturn(List.of());
+        when(shiftReportRepository.findAllByOrderByCreatedAtDesc()).thenReturn(List.of());
+        when(recurringPackageRepository.findByCourtIdInOrderByCreatedAtDesc(List.of("c1"))).thenReturn(List.of(pkg));
+
+        ResponseEntity<ApiResponse<Map<String, Object>>> res = controller.getOverview("Bearer tok_owner", "ALL");
+        assertEquals(200, res.getStatusCode().value());
+        Map<String, Object> data = res.getBody().getData();
+
+        assertEquals(1250000L, ((Number) data.get("totalRevenue")).longValue());
+        assertEquals(1200000L, ((Number) data.get("courtRevenue")).longValue());
+        assertEquals(50000L, ((Number) data.get("posRevenue")).longValue());
+        assertEquals(1200000L, ((Number) data.get("walletRevenue")).longValue());
+        assertEquals(50000L, ((Number) data.get("cashRevenue")).longValue());
+
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> fields = (List<Map<String, Object>>) data.get("fieldRevenues");
+        assertEquals(1, fields.size());
+        assertEquals(1200000L, ((Number) fields.get(0).get("courtRevenue")).longValue());
+        assertEquals(50000L, ((Number) fields.get(0).get("serviceRevenue")).longValue());
+        assertEquals(1250000L, ((Number) fields.get(0).get("totalRevenue")).longValue());
     }
 }

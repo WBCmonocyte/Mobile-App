@@ -15,7 +15,7 @@ val localProperties = Properties().apply {
 val mapsApiKey: String = System.getenv("MAPS_API_KEY")
     ?: localProperties.getProperty("MAPS_API_KEY")
     ?: localProperties.getProperty("maps.api.key")
-    ?: "AIzaSyBXzrMkqr3DB1plHhVkXvTBfQz6xnCOUyQ"
+    ?: ""
 
 val apiBaseUrl: String = (System.getenv("API_BASE_URL")
     ?: localProperties.getProperty("API_BASE_URL")

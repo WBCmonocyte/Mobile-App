@@ -72,6 +72,12 @@ public class Booking {
     @Column(name = "service_amount")
     private Integer serviceAmount = 0;
 
+    @Column(name = "recurring_package_id", length = 64)
+    private String recurringPackageId;
+
+    @Column(name = "recurring_session_id", length = 64)
+    private String recurringSessionId;
+
     public Booking() {}
 
     public Booking(String id, String userId, String courtId, String courtName, String fieldDetail,
@@ -172,6 +178,12 @@ public class Booking {
 
     public Integer getServiceAmount() { return serviceAmount != null ? serviceAmount : 0; }
     public void setServiceAmount(Integer serviceAmount) { this.serviceAmount = serviceAmount != null ? serviceAmount : 0; }
+
+    public String getRecurringPackageId() { return recurringPackageId; }
+    public void setRecurringPackageId(String recurringPackageId) { this.recurringPackageId = recurringPackageId; }
+
+    public String getRecurringSessionId() { return recurringSessionId; }
+    public void setRecurringSessionId(String recurringSessionId) { this.recurringSessionId = recurringSessionId; }
 
     public boolean isExpired() {
         return "PENDING".equalsIgnoreCase(this.status) &&

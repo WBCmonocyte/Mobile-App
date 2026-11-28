@@ -26,7 +26,7 @@ public class InventoryTransaction {
     @Column(name = "court_id", nullable = false, length = 50)
     private String courtId;
 
-    /** IMPORT, SALE, ADJUST */
+    /** IMPORT, SALE, ADJUST, DAMAGE, EXPIRED, INTERNAL_USE, TRANSFER_OUT, TRANSFER_IN */
     @Column(nullable = false, length = 30)
     private String type;
 

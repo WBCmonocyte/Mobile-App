@@ -20,6 +20,7 @@ import com.easysport.repository.CourtResourceRepository;
 import com.easysport.repository.InventoryItemRepository;
 import com.easysport.repository.InventoryTransactionRepository;
 import com.easysport.repository.PosSaleRepository;
+import com.easysport.repository.RecurringSessionRepository;
 import com.easysport.repository.ShiftReportRepository;
 import com.easysport.repository.StaffShiftRepository;
 import com.easysport.service.AuthService;
@@ -63,6 +64,7 @@ public class StaffController {
     private final CourtResourceRepository courtResourceRepository;
     private final CourtFieldRepository courtFieldRepository;
     private final CourtHoldTransactionService courtHoldTransactionService;
+    private final RecurringSessionRepository recurringSessionRepository;
 
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private InventoryItemRepository inventoryItemRepository;
@@ -80,7 +82,25 @@ public class StaffController {
                            Clock clock) {
         this(authService, bookingRepository, courtRepository, staffShiftRepository,
                 shiftReportRepository, posSaleRepository, shiftPlanningService, clock,
-                null, null, null, null);
+                null, null, null, null, null);
+    }
+
+    public StaffController(AuthService authService,
+                           BookingRepository bookingRepository,
+                           CourtRepository courtRepository,
+                           StaffShiftRepository staffShiftRepository,
+                           ShiftReportRepository shiftReportRepository,
+                           PosSaleRepository posSaleRepository,
+                           ShiftPlanningService shiftPlanningService,
+                           Clock clock,
+                           CourtHoldSlotRepository courtHoldSlotRepository,
+                           CourtResourceRepository courtResourceRepository,
+                           CourtFieldRepository courtFieldRepository,
+                           CourtHoldTransactionService courtHoldTransactionService) {
+        this(authService, bookingRepository, courtRepository, staffShiftRepository,
+                shiftReportRepository, posSaleRepository, shiftPlanningService, clock,
+                courtHoldSlotRepository, courtResourceRepository, courtFieldRepository,
+                courtHoldTransactionService, null);
     }
 
     @org.springframework.beans.factory.annotation.Autowired
@@ -95,7 +115,8 @@ public class StaffController {
                            @org.springframework.beans.factory.annotation.Autowired(required = false) CourtHoldSlotRepository courtHoldSlotRepository,
                            @org.springframework.beans.factory.annotation.Autowired(required = false) CourtResourceRepository courtResourceRepository,
                            @org.springframework.beans.factory.annotation.Autowired(required = false) CourtFieldRepository courtFieldRepository,
-                           @org.springframework.beans.factory.annotation.Autowired(required = false) CourtHoldTransactionService courtHoldTransactionService) {
+                           @org.springframework.beans.factory.annotation.Autowired(required = false) CourtHoldTransactionService courtHoldTransactionService,
+                           @org.springframework.beans.factory.annotation.Autowired(required = false) RecurringSessionRepository recurringSessionRepository) {
         this.authService = authService;
         this.bookingRepository = bookingRepository;
         this.courtRepository = courtRepository;
@@ -108,6 +129,7 @@ public class StaffController {
         this.courtResourceRepository = courtResourceRepository;
         this.courtFieldRepository = courtFieldRepository;
         this.courtHoldTransactionService = courtHoldTransactionService;
+        this.recurringSessionRepository = recurringSessionRepository;
     }
 
     private User requireStaffOrOwner(String authHeader) {
@@ -341,6 +363,13 @@ public class StaffController {
         }
         booking.setStatus("CHECKED_IN");
         bookingRepository.save(booking);
+        if (recurringSessionRepository != null && booking.getRecurringSessionId() != null) {
+            recurringSessionRepository.findById(booking.getRecurringSessionId()).ifPresent(sess -> {
+                sess.setStatus("CHECKED_IN");
+                sess.setResolutionNote("Đã check-in tại sân");
+                recurringSessionRepository.save(sess);
+            });
+        }
         return ResponseEntity.ok(ApiResponse.success("Check-in thành công", booking));
     }
 
@@ -444,7 +473,7 @@ public class StaffController {
             }
         }
 
-        deductInventoryForPos(body.get("items"), staff.getFullName(), "Gắn vào đơn sân " + booking.getId());
+        deductInventoryForPos(body.get("items"), booking.getCourtId(), staff.getFullName(), "Gắn vào đơn sân " + booking.getId());
 
         String updatedNote = booking.getServiceNote().isEmpty()
                 ? note
@@ -505,6 +534,13 @@ public class StaffController {
         booking.setStatus("COMPLETED");
         booking.setPayment("COMPLETED");
         bookingRepository.save(booking);
+        if (recurringSessionRepository != null && booking.getRecurringSessionId() != null) {
+            recurringSessionRepository.findById(booking.getRecurringSessionId()).ifPresent(sess -> {
+                sess.setStatus("COMPLETED");
+                sess.setResolutionNote("Đã hoàn tất buổi chơi");
+                recurringSessionRepository.save(sess);
+            });
+        }
         return ResponseEntity.ok(ApiResponse.success("Đã trả sân & hoàn tất thanh toán", booking));
     }
 
@@ -563,7 +599,7 @@ public class StaffController {
                 ? String.valueOf(body.get("courtName"))
                 : currentShift.map(StaffShift::getCourtName).orElse("Sân bóng Thành Phát");
 
-        deductInventoryForPos(body.get("items"), staff.getFullName(), "Bán lẻ tại quầy POS");
+        deductInventoryForPos(body.get("items"), courtId, staff.getFullName(), "Bán lẻ tại quầy POS");
 
         PosSale sale = new PosSale(
                 "pos_" + UUID.randomUUID().toString().replace("-", "").substring(0, 8),
@@ -590,9 +626,19 @@ public class StaffController {
         if (inventoryItemRepository == null) {
             return ResponseEntity.ok(ApiResponse.success("Danh sách kho trống", Collections.emptyList()));
         }
-        String resolvedCourtId = (courtId != null && !courtId.isBlank())
-                ? courtId.trim()
-                : resolveCurrentOrTodayShift(staff.getId()).map(StaffShift::getCourtId).orElse("court_thanh_phat");
+        Optional<StaffShift> currentShift = resolveCurrentOrTodayShift(staff.getId());
+        String requestedCourt = (courtId != null && !courtId.isBlank()) ? courtId.trim() : null;
+        if ("STAFF".equalsIgnoreCase(staff.getRole())
+                && requestedCourt != null
+                && currentShift.isPresent()
+                && currentShift.get().getCourtId() != null
+                && !currentShift.get().getCourtId().isBlank()
+                && !requestedCourt.equals(currentShift.get().getCourtId())) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Nhân viên chỉ được xem kho của chi nhánh đang trực.");
+        }
+        String resolvedCourtId = requestedCourt != null
+                ? requestedCourt
+                : currentShift.map(StaffShift::getCourtId).orElse("court_thanh_phat");
 
         List<InventoryItem> items = inventoryItemRepository.findByCourtIdAndActiveTrueOrderByNameAsc(resolvedCourtId);
         List<Map<String, Object>> result = new ArrayList<>();
@@ -617,12 +663,11 @@ public class StaffController {
         return ResponseEntity.ok(ApiResponse.success("Kho hàng tại chi nhánh", result));
     }
 
-    @SuppressWarnings("unchecked")
-    private void deductInventoryForPos(Object rawItems, String staffName, String notePrefix) {
+    private void deductInventoryForPos(Object rawItems, String expectedCourtId, String staffName, String notePrefix) {
         if (inventoryItemRepository == null || !(rawItems instanceof List<?> list) || list.isEmpty()) {
             return;
         }
-        List<Map.Entry<InventoryItem, Integer>> deductions = new ArrayList<>();
+        Map<String, Integer> requestedQtyByItem = new LinkedHashMap<>();
         for (Object entry : list) {
             if (!(entry instanceof Map<?, ?> map)) continue;
             Object idObj = map.get("itemId");
@@ -631,10 +676,22 @@ public class StaffController {
             String itemId = String.valueOf(idObj).trim();
             int qty = qtyNum.intValue();
             if (itemId.isEmpty() || qty <= 0) continue;
+            requestedQtyByItem.merge(itemId, qty, Integer::sum);
+        }
+
+        List<Map.Entry<InventoryItem, Integer>> deductions = new ArrayList<>();
+        for (Map.Entry<String, Integer> req : requestedQtyByItem.entrySet()) {
+            String itemId = req.getKey();
+            int qty = req.getValue();
 
             InventoryItem item = inventoryItemRepository.findById(itemId).orElse(null);
             if (item == null || !Boolean.TRUE.equals(item.getActive())) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Mặt hàng không tồn tại trong kho: " + itemId);
+            }
+            if (expectedCourtId != null && !expectedCourtId.isBlank()
+                    && item.getCourtId() != null && !expectedCourtId.equals(item.getCourtId())) {
+                throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                        "Mặt hàng \"" + item.getName() + "\" không thuộc kho của chi nhánh này.");
             }
             if (item.getStockQuantity() < qty) {
                 throw new ResponseStatusException(
@@ -721,7 +778,10 @@ public class StaffController {
 
                 int paidCourt = 0;
                 int paidService = 0;
-                if ("PAID".equals(st) || "DEPOSIT_PAID".equals(st) || "CHECKED_IN".equals(st) || "COMPLETED".equals(st)) {
+                boolean prePaidOnlineOrCredit = b.getRecurringPackageId() != null
+                        || "WALLET".equalsIgnoreCase(b.getPaymentMethod())
+                        || "CREDIT".equalsIgnoreCase(b.getPaymentMethod());
+                if (!prePaidOnlineOrCredit && ("PAID".equals(st) || "DEPOSIT_PAID".equals(st) || "CHECKED_IN".equals(st) || "COMPLETED".equals(st))) {
                     paidCourt = b.getDepositAmount() != null ? b.getDepositAmount() : 0;
                 }
                 if ("COMPLETED".equals(st) && !splitSettledIds.contains(b.getId())) {

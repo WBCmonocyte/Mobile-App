@@ -247,6 +247,18 @@ object PaymentApiClient {
         }
     }
 
+    suspend fun resetPassword(email: String, code: String? = null, password: String? = null): Result<Unit> =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val payload = JSONObject().put("email", email)
+                val path = if (code == null) "" else "/confirm"
+                if (code != null) payload.put("code", code).put("password", password)
+                val (status, body) = sendHttpRequest("POST", "$baseUrl/api/auth/password-reset$path", payload.toString())
+                if (status !in 200..299) error(parseErrorMessage(body, "Yêu cầu thất bại (HTTP $status)"))
+                Unit
+            }
+        }
+
     suspend fun verifyRegistration(challengeId: String, code: String): Result<AuthResultData> =
         withContext(Dispatchers.IO) {
             runCatching {
@@ -328,7 +340,7 @@ object PaymentApiClient {
             phone = obj.optString("phone", ""),
             address = obj.optString("address", ""),
             dateOfBirth = obj.optString("dateOfBirth", ""),
-            role = obj.optString("role", "USER").ifBlank { "USER" }.uppercase()
+            role = obj.optString("role", "USER")
         )
     }
 
@@ -664,7 +676,7 @@ object PaymentApiClient {
     }
 
     // =========================================================================
-    // API TIN TỨC THỂ THAO (NEWS) TỪ RSS VNEXPRESS & TUỔI TRẺ
+    // API TIN TỨC THỂ THAO (NEWS)
     // =========================================================================
 
     suspend fun getNews(): List<NewsItem> = withContext(Dispatchers.IO) {
@@ -827,51 +839,10 @@ object PaymentApiClient {
         body: String?,
         token: String? = authToken,
     ): Pair<Int, String> {
-        val candidates = mutableListOf<String>()
-        // Ưu tiên 127.0.0.1 (adb reverse) vì nếu có adb reverse sẽ phản hồi ngay lập tức (0ms),
-        // và nếu không có thì bị từ chối kết nối ngay tức thì (0ms) thay vì bị treo timeout 10s như 10.0.2.2
-        if (urlStr.contains("10.0.2.2:8080")) {
-            candidates.add(urlStr.replace("10.0.2.2:8080", "127.0.0.1:8080"))
-            candidates.add(urlStr)
-        } else if (urlStr.contains("127.0.0.1:8080")) {
-            candidates.add(urlStr)
-            candidates.add(urlStr.replace("127.0.0.1:8080", "10.0.2.2:8080"))
-        } else {
-            candidates.add(urlStr)
-        }
-
-        var lastException: Exception? = null
-        for ((index, candidate) in candidates.withIndex()) {
-            val timeout = if (candidates.size > 1 && index == 0) 3_000 else CONNECT_TIMEOUT_MS
-            try {
-                val result = executeSingleHttp(method, candidate, body, token, timeout)
-                if (candidate != urlStr) {
-                    if (candidate.contains("127.0.0.1:8080")) {
-                        baseUrl = baseUrl.replace("10.0.2.2:8080", "127.0.0.1:8080")
-                    } else if (candidate.contains("10.0.2.2:8080")) {
-                        baseUrl = baseUrl.replace("127.0.0.1:8080", "10.0.2.2:8080")
-                    }
-                }
-                return result
-            } catch (e: Exception) {
-                lastException = e
-                android.util.Log.w("PaymentApiClient", "Request to $candidate failed: ${e.message}")
-            }
-        }
-        throw IllegalStateException("Không thể kết nối đến máy chủ backend ($baseUrl). Vui lòng đảm bảo backend đang hoạt động. Chi tiết: ${lastException?.localizedMessage ?: lastException?.message}")
-    }
-
-    private fun executeSingleHttp(
-        method: String,
-        urlStr: String,
-        body: String?,
-        token: String?,
-        connectTimeoutMs: Int
-    ): Pair<Int, String> {
         val url = URL(urlStr)
         val conn = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = method
-            connectTimeout = connectTimeoutMs
+            connectTimeout = CONNECT_TIMEOUT_MS
             readTimeout = READ_TIMEOUT_MS
             setRequestProperty("Accept", "application/json")
             instanceFollowRedirects = false
@@ -900,6 +871,8 @@ object PaymentApiClient {
                 ""
             }
             return Pair(statusCode, responseText)
+        } catch (e: Exception) {
+            throw IllegalStateException("Không thể kết nối đến máy chủ backend ($baseUrl). Vui lòng đảm bảo backend đang hoạt động. Chi tiết: ${e.localizedMessage ?: e.message}")
         } finally {
             conn.disconnect()
         }

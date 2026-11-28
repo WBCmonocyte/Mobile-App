@@ -6,11 +6,15 @@ import com.easysport.entity.Court;
 import com.easysport.entity.CourtHold;
 import com.easysport.entity.CourtHoldSlot;
 import com.easysport.entity.Payment;
+import com.easysport.entity.RecurringPackage;
+import com.easysport.entity.RecurringSession;
 import com.easysport.repository.BookingRepository;
 import com.easysport.repository.CourtHoldRepository;
 import com.easysport.repository.CourtHoldSlotRepository;
 import com.easysport.repository.CourtRepository;
 import com.easysport.repository.PaymentRepository;
+import com.easysport.repository.RecurringPackageRepository;
+import com.easysport.repository.RecurringSessionRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -38,6 +42,8 @@ public class SepayService {
     private final CourtHoldSlotRepository courtHoldSlotRepository;
     private final Clock clock;
     private final NotificationService notificationService;
+    private final RecurringPackageRepository recurringPackageRepository;
+    private final RecurringSessionRepository recurringSessionRepository;
 
     @Autowired
     public SepayService(SepayConfig sepayConfig,
@@ -47,7 +53,9 @@ public class SepayService {
                         CourtHoldRepository courtHoldRepository,
                         CourtHoldSlotRepository courtHoldSlotRepository,
                         Clock clock,
-                        @Autowired(required = false) NotificationService notificationService) {
+                        @Autowired(required = false) NotificationService notificationService,
+                        @Autowired(required = false) RecurringPackageRepository recurringPackageRepository,
+                        @Autowired(required = false) RecurringSessionRepository recurringSessionRepository) {
         this.sepayConfig = sepayConfig;
         this.paymentRepository = paymentRepository;
         this.bookingRepository = bookingRepository;
@@ -56,6 +64,19 @@ public class SepayService {
         this.courtHoldSlotRepository = courtHoldSlotRepository;
         this.clock = clock;
         this.notificationService = notificationService;
+        this.recurringPackageRepository = recurringPackageRepository;
+        this.recurringSessionRepository = recurringSessionRepository;
+    }
+
+    public SepayService(SepayConfig sepayConfig,
+                        PaymentRepository paymentRepository,
+                        BookingRepository bookingRepository,
+                        CourtRepository courtRepository,
+                        CourtHoldRepository courtHoldRepository,
+                        CourtHoldSlotRepository courtHoldSlotRepository,
+                        Clock clock,
+                        NotificationService notificationService) {
+        this(sepayConfig, paymentRepository, bookingRepository, courtRepository, courtHoldRepository, courtHoldSlotRepository, clock, notificationService, null, null);
     }
 
     public SepayService(SepayConfig sepayConfig,
@@ -65,7 +86,7 @@ public class SepayService {
                         CourtHoldRepository courtHoldRepository,
                         CourtHoldSlotRepository courtHoldSlotRepository,
                         Clock clock) {
-        this(sepayConfig, paymentRepository, bookingRepository, courtRepository, courtHoldRepository, courtHoldSlotRepository, clock, null);
+        this(sepayConfig, paymentRepository, bookingRepository, courtRepository, courtHoldRepository, courtHoldSlotRepository, clock, null, null, null);
     }
 
     // Constructor tiện lợi cho test độc lập (không đánh dấu @Autowired để Spring dùng constructor đầy đủ)
@@ -73,7 +94,7 @@ public class SepayService {
                         PaymentRepository paymentRepository,
                         BookingRepository bookingRepository,
                         CourtRepository courtRepository) {
-        this(sepayConfig, paymentRepository, bookingRepository, courtRepository, null, null, Clock.systemDefaultZone(), null);
+        this(sepayConfig, paymentRepository, bookingRepository, courtRepository, null, null, Clock.systemDefaultZone(), null, null, null);
     }
 
     public static class PriceResult {
@@ -237,7 +258,9 @@ public class SepayService {
         String courtName = escapeHtml(booking.getCourtName());
         String fieldDetail = escapeHtml(booking.getFieldDetail());
         String timeRange = escapeHtml(booking.getTimeRange());
-        String dateLabel = escapeHtml(booking.getDateLabel());
+        String dateLabel = escapeHtml(payment.getRecurringPackageId() != null
+                ? ("Gói cố định 12 buổi · Bắt đầu " + booking.getDateLabel())
+                : booking.getDateLabel());
         String token = escapeHtml(payment.getCheckoutToken());
 
         return "<!DOCTYPE html>\n" +
@@ -289,7 +312,9 @@ public class SepayService {
     public boolean confirmMockPayment(Payment payment, Booking booking) {
         LocalDateTime now = LocalDateTime.now(clock);
         courtRepository.lockById(booking.getCourtId()).orElseThrow();
-        CourtHold hold = courtHoldRepository.findByBookingId(booking.getId()).orElse(null);
+        CourtHold hold = (payment.getRecurringPackageId() != null
+                ? courtHoldRepository.findByRecurringPackageId(payment.getRecurringPackageId())
+                : courtHoldRepository.findByBookingId(booking.getId())).orElse(null);
         if (hold != null) hold = courtHoldRepository.findByIdWithLock(hold.getId()).orElseThrow();
         Payment lockedPayment = paymentRepository.lockById(payment.getId()).orElseThrow();
 
@@ -312,14 +337,18 @@ public class SepayService {
         }
         courtHoldRepository.save(hold);
 
-        String status = "CASH_ON_SITE".equals(lockedPayment.getPaymentMethod()) ? "DEPOSIT_PAID" : "PAID";
-        booking.setStatus(status);
-        booking.setPayment(status);
-        bookingRepository.save(booking);
+        if (lockedPayment.getRecurringPackageId() != null) {
+            confirmRecurringPackageOnPaid(lockedPayment, booking, now);
+        } else {
+            String status = "CASH_ON_SITE".equals(lockedPayment.getPaymentMethod()) ? "DEPOSIT_PAID" : "PAID";
+            booking.setStatus(status);
+            booking.setPayment(status);
+            bookingRepository.save(booking);
 
-        if (notificationService != null) {
-            notificationService.createPaymentReceivedNotif(booking, lockedPayment);
-            notificationService.createBookingConfirmedNotif(booking);
+            if (notificationService != null) {
+                notificationService.createPaymentReceivedNotif(booking, lockedPayment);
+                notificationService.createBookingConfirmedNotif(booking);
+            }
         }
         return true;
     }
@@ -356,7 +385,9 @@ public class SepayService {
         if (booking == null) return rejectIpn("booking_not_found");
         // All reservation writers take the same court lock BEFORE the hold/payment locks.
         courtRepository.lockById(booking.getCourtId()).orElseThrow();
-        CourtHold hold = courtHoldRepository.findByBookingId(booking.getId()).orElse(null);
+        CourtHold hold = (snapshot.getRecurringPackageId() != null
+                ? courtHoldRepository.findByRecurringPackageId(snapshot.getRecurringPackageId())
+                : courtHoldRepository.findByBookingId(booking.getId())).orElse(null);
         if (hold != null) hold = courtHoldRepository.findByIdWithLock(hold.getId()).orElseThrow();
         Payment payment = paymentRepository.lockById(snapshot.getId()).orElseThrow();
         int orderAmount = parseAmount(order.get("order_amount"));
@@ -383,18 +414,28 @@ public class SepayService {
                 slot.setStatus("CONFIRMED");
                 courtHoldSlotRepository.save(slot);
             }
-            String status = "CASH_ON_SITE".equals(payment.getPaymentMethod()) ? "DEPOSIT_PAID" : "PAID";
-            booking.setStatus(status);
-            booking.setPayment(status);
-            if (notificationService != null) {
-                notificationService.createPaymentReceivedNotif(booking, payment);
-                notificationService.createBookingConfirmedNotif(booking);
+            if (payment.getRecurringPackageId() != null) {
+                confirmRecurringPackageOnPaid(payment, booking, now);
+            } else {
+                String status = "CASH_ON_SITE".equals(payment.getPaymentMethod()) ? "DEPOSIT_PAID" : "PAID";
+                booking.setStatus(status);
+                booking.setPayment(status);
+                bookingRepository.save(booking);
+                if (notificationService != null) {
+                    notificationService.createPaymentReceivedNotif(booking, payment);
+                    notificationService.createBookingConfirmedNotif(booking);
+                }
             }
         } else {
             // Preserve a previously confirmed booking if a legacy second attempt is paid.
             if (hold == null || !hold.isConfirmed()) {
-                booking.setStatus("REVIEW_REQUIRED");
-                booking.setPayment("REVIEW_REQUIRED");
+                if (payment.getRecurringPackageId() != null) {
+                    markRecurringPackageReviewRequired(payment.getRecurringPackageId());
+                } else {
+                    booking.setStatus("REVIEW_REQUIRED");
+                    booking.setPayment("REVIEW_REQUIRED");
+                    bookingRepository.save(booking);
+                }
                 if (hold != null) {
                     hold.setStatus("REVIEW_REQUIRED");
                     for (CourtHoldSlot slot : courtHoldSlotRepository.findByHoldId(hold.getId())) {
@@ -405,8 +446,76 @@ public class SepayService {
             }
         }
         if (hold != null) courtHoldRepository.save(hold);
-        bookingRepository.save(booking);
         return true;
+    }
+
+    private void confirmRecurringPackageOnPaid(Payment payment, Booking firstBooking, LocalDateTime now) {
+        String packageId = payment.getRecurringPackageId();
+        LocalDateTime confirmedHoldExpiry = now.plusYears(1);
+
+        if (recurringPackageRepository != null) {
+            recurringPackageRepository.lockById(packageId).ifPresent(pkg -> {
+                pkg.setStatus("ACTIVE");
+                pkg.setTotalPaid(payment.getAmount());
+                recurringPackageRepository.save(pkg);
+                if (notificationService != null) {
+                    notificationService.createPaymentReceivedNotif(firstBooking, payment);
+                    notificationService.createRecurringConfirmedNotif(
+                            pkg.getUserId(), pkg.getId(), pkg.getCourtName(),
+                            pkg.getFieldDetail(), pkg.getTimeRange(), pkg.getStartDate(),
+                            pkg.getTotalSessions(), firstBooking.getId()
+                    );
+                }
+            });
+        }
+        if (recurringSessionRepository != null) {
+            for (RecurringSession rs : recurringSessionRepository.findByPackageIdOrderBySessionIndexAsc(packageId)) {
+                rs.setStatus("UPCOMING");
+                rs.setPaidAmountSnapshot(rs.getUnitPriceSnapshot());
+                recurringSessionRepository.save(rs);
+            }
+        }
+        List<Booking> pkgBookings = bookingRepository.findByRecurringPackageId(packageId);
+        if (pkgBookings.isEmpty()) {
+            firstBooking.setStatus("PAID");
+            firstBooking.setPayment("PAID");
+            firstBooking.setHoldExpiresAt(confirmedHoldExpiry);
+            bookingRepository.save(firstBooking);
+        } else {
+            for (Booking b : pkgBookings) {
+                b.setStatus("PAID");
+                b.setPayment("PAID");
+                b.setHoldExpiresAt(confirmedHoldExpiry);
+            }
+            bookingRepository.saveAll(pkgBookings);
+        }
+    }
+
+    private void markRecurringPackageReviewRequired(String packageId) {
+        if (recurringPackageRepository != null) {
+            recurringPackageRepository.lockById(packageId).ifPresent(pkg -> {
+                if (!"ACTIVE".equalsIgnoreCase(pkg.getStatus())) {
+                    pkg.setStatus("REVIEW_REQUIRED");
+                    recurringPackageRepository.save(pkg);
+                }
+            });
+        }
+        if (recurringSessionRepository != null) {
+            for (RecurringSession rs : recurringSessionRepository.findByPackageIdOrderBySessionIndexAsc(packageId)) {
+                if (!"UPCOMING".equalsIgnoreCase(rs.getStatus())) {
+                    rs.setStatus("REVIEW_REQUIRED");
+                    recurringSessionRepository.save(rs);
+                }
+            }
+        }
+        List<Booking> pkgBookings = bookingRepository.findByRecurringPackageId(packageId);
+        for (Booking b : pkgBookings) {
+            if ("PENDING".equalsIgnoreCase(b.getStatus()) || "EXPIRED".equalsIgnoreCase(b.getStatus())) {
+                b.setStatus("REVIEW_REQUIRED");
+                b.setPayment("REVIEW_REQUIRED");
+            }
+        }
+        bookingRepository.saveAll(pkgBookings);
     }
 
     private boolean isSandboxSetupProbe(Map<String, Object> payload) {

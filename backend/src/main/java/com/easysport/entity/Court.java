@@ -25,6 +25,9 @@ public class Court {
     @Column(length = 100)
     private String district;
 
+    @Column(name = "owner_id", length = 50)
+    private String ownerId;
+
     private Double rating = 5.0;
 
     @Column(name = "review_count")
@@ -139,5 +142,8 @@ public class Court {
 
     public List<CourtField> getFields() { return fields; }
     public void setFields(List<CourtField> fields) { this.fields = fields; }
+
+    public String getOwnerId() { return ownerId; }
+    public void setOwnerId(String ownerId) { this.ownerId = ownerId; }
 }
 

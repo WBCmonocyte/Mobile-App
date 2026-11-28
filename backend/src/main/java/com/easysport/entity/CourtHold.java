@@ -77,6 +77,9 @@ public class CourtHold {
     @Column(name = "idempotency_key", length = 128, unique = true)
     private String idempotencyKey;
 
+    @Column(name = "recurring_package_id", length = 64)
+    private String recurringPackageId;
+
     @Version
     private Long version;
 
@@ -198,6 +201,9 @@ public class CourtHold {
 
     public String getIdempotencyKey() { return idempotencyKey; }
     public void setIdempotencyKey(String idempotencyKey) { this.idempotencyKey = idempotencyKey; }
+
+    public String getRecurringPackageId() { return recurringPackageId; }
+    public void setRecurringPackageId(String recurringPackageId) { this.recurringPackageId = recurringPackageId; }
 
     public Long getVersion() { return version; }
     public void setVersion(Long version) { this.version = version; }
