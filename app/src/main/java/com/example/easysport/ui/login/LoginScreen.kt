@@ -1,5 +1,6 @@
 package com.example.easysport.ui.login
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -7,6 +8,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -31,7 +33,9 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -213,7 +217,53 @@ fun LoginScreen(
             }
         }
 
-        Spacer(Modifier.height(24.dp))
+        Spacer(Modifier.height(20.dp))
+        Text(
+            text = "Đăng nhập nhanh (Test chức năng)",
+            color = BodyColor,
+            fontSize = 12.5.sp,
+            fontWeight = FontWeight.Medium,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Spacer(Modifier.height(10.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            listOf(
+                Triple("Khách hàng", "nguyenvana@gmail.com", Color(0xFF0EA5E9)),
+                Triple("Nhân viên", "staff@easysport.vn", Color(0xFF10B981)),
+                Triple("Chủ sân", "owner@easysport.vn", Primary),
+            ).forEach { (label, demoEmail, accent) ->
+                OutlinedButton(
+                    onClick = {
+                        email = demoEmail
+                        password = "123456"
+                        onInputChange()
+                        onSignIn(demoEmail, "123456")
+                    },
+                    enabled = !isLoading,
+                    shape = RoundedCornerShape(12.dp),
+                    border = BorderStroke(1.dp, accent.copy(alpha = 0.45f)),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        containerColor = accent.copy(alpha = 0.08f),
+                        contentColor = accent,
+                    ),
+                    contentPadding = PaddingValues(horizontal = 6.dp, vertical = 10.dp),
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text(
+                        text = label,
+                        fontSize = 12.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                    )
+                }
+            }
+        }
+
+        Spacer(Modifier.height(20.dp))
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.Center,

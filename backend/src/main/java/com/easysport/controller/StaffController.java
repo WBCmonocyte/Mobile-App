@@ -130,6 +130,7 @@ public class StaffController {
         }
         String todayStr = LocalDate.now(clock).format(DATE_FORMAT);
         List<StaffShift> myShifts = staffShiftRepository.findByStaffIdOrderByCreatedAtDesc(actor.getId());
+        shiftPlanningService.autoCloseExpiredActiveShifts(myShifts);
         boolean hasActiveShift = myShifts.stream()
                 .anyMatch(s -> "ACTIVE".equalsIgnoreCase(s.getStatus())
                         && todayStr.equals(s.getShiftDate())
@@ -772,6 +773,7 @@ public class StaffController {
     ) {
         User staff = requireStaffOrOwner(authHeader);
         List<StaffShift> list = new ArrayList<>(staffShiftRepository.findByStaffIdOrderByCreatedAtDesc(staff.getId()));
+        shiftPlanningService.autoCloseExpiredActiveShifts(list);
         list.sort((a, b) -> {
             LocalDate da = ShiftPlanningService.parseDateOrNull(a.getShiftDate());
             LocalDate db = ShiftPlanningService.parseDateOrNull(b.getShiftDate());
@@ -934,8 +936,9 @@ public class StaffController {
         }
         String todayStr = LocalDate.now(clock).format(DATE_FORMAT);
         List<StaffShift> myShifts = staffShiftRepository.findByStaffIdOrderByCreatedAtDesc(actor.getId());
+        shiftPlanningService.autoCloseExpiredActiveShifts(myShifts);
         return myShifts.stream()
-                .filter(s -> "ACTIVE".equalsIgnoreCase(s.getStatus()))
+                .filter(s -> "ACTIVE".equalsIgnoreCase(s.getStatus()) && todayStr.equals(s.getShiftDate()))
                 .findFirst()
                 .or(() -> myShifts.stream()
                         .filter(s -> "COMPLETED".equalsIgnoreCase(s.getStatus()) && todayStr.equals(s.getShiftDate()))
@@ -946,8 +949,9 @@ public class StaffController {
     private Optional<StaffShift> resolveCurrentOrTodayShift(String staffId) {
         String todayStr = LocalDate.now(clock).format(DATE_FORMAT);
         List<StaffShift> myShifts = staffShiftRepository.findByStaffIdOrderByCreatedAtDesc(staffId);
+        shiftPlanningService.autoCloseExpiredActiveShifts(myShifts);
         return myShifts.stream()
-                .filter(s -> "ACTIVE".equalsIgnoreCase(s.getStatus()))
+                .filter(s -> "ACTIVE".equalsIgnoreCase(s.getStatus()) && todayStr.equals(s.getShiftDate()))
                 .findFirst()
                 .or(() -> myShifts.stream()
                         .filter(s -> "COMPLETED".equalsIgnoreCase(s.getStatus()) && todayStr.equals(s.getShiftDate()))
@@ -1003,8 +1007,9 @@ public class StaffController {
     private Optional<StaffShift> resolveHandoverShift(String staffId) {
         String todayStr = LocalDate.now(clock).format(DATE_FORMAT);
         List<StaffShift> myShifts = staffShiftRepository.findByStaffIdOrderByCreatedAtDesc(staffId);
+        shiftPlanningService.autoCloseExpiredActiveShifts(myShifts);
         return myShifts.stream()
-                .filter(s -> "ACTIVE".equalsIgnoreCase(s.getStatus()))
+                .filter(s -> "ACTIVE".equalsIgnoreCase(s.getStatus()) && todayStr.equals(s.getShiftDate()))
                 .findFirst()
                 .or(() -> myShifts.stream()
                         .filter(s -> "COMPLETED".equalsIgnoreCase(s.getStatus()) && todayStr.equals(s.getShiftDate()))

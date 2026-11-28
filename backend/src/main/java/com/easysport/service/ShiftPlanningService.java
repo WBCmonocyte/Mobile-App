@@ -316,6 +316,7 @@ public class ShiftPlanningService {
         List<StaffShift> weekShifts = staffShiftRepository.findByShiftDateIn(weekDates).stream()
                 .filter(s -> !filterByCourt || courtIdFilter.equals(s.getCourtId()))
                 .toList();
+        autoCloseExpiredActiveShifts(weekShifts);
         List<User> staffUsers = userRepository.findByRole("STAFF");
 
         Map<String, Double> hoursByStaff = new HashMap<>();
@@ -612,11 +613,17 @@ public class ShiftPlanningService {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "Ca chưa bắt đầu");
         }
 
-        LocalTime nowTime = LocalDateTime.now(clock).toLocalTime();
+        LocalDateTime now = LocalDateTime.now(clock);
+        LocalDate shiftDate = parseDateOrNull(shift.getShiftDate());
         LocalTime[] times = timesOf(shift.getShiftSlot());
         int earlyMinutes = 0;
-        if (times != null && nowTime.isBefore(times[1])) {
-            earlyMinutes = (int) Duration.between(nowTime, times[1]).toMinutes();
+        if (shiftDate != null && times != null) {
+            LocalDateTime scheduledEnd = shiftDate.atTime(times[1]);
+            if (now.isBefore(scheduledEnd)) {
+                earlyMinutes = (int) Duration.between(now, scheduledEnd).toMinutes();
+            }
+        } else if (times != null && now.toLocalTime().isBefore(times[1])) {
+            earlyMinutes = (int) Duration.between(now.toLocalTime(), times[1]).toMinutes();
         }
 
         if (enforceTimeWindow && earlyMinutes > 15 && (reason == null || reason.trim().isEmpty())) {
@@ -634,8 +641,50 @@ public class ShiftPlanningService {
         }
 
         shift.setStatus("COMPLETED");
-        shift.setCheckOutTime(nowTime.format(TIME_FORMAT));
+        shift.setCheckOutTime(now.toLocalTime().format(TIME_FORMAT));
         return staffShiftRepository.save(shift);
+    }
+
+    /**
+     * Tự động đóng các ca ACTIVE đã quá giờ kết thúc (>30 phút) hoặc để qua ngày.
+     */
+    public void autoCloseExpiredActiveShifts(List<StaffShift> shifts) {
+        if (shifts == null || shifts.isEmpty()) {
+            return;
+        }
+        LocalDateTime now = LocalDateTime.now(clock);
+        LocalDate today = now.toLocalDate();
+        List<StaffShift> toSave = new ArrayList<>();
+        for (StaffShift s : shifts) {
+            if (s == null || !"ACTIVE".equalsIgnoreCase(s.getStatus())) {
+                continue;
+            }
+            LocalDate shiftDate = parseDateOrNull(s.getShiftDate());
+            if (shiftDate == null) {
+                continue;
+            }
+            LocalTime[] times = timesOf(s.getShiftSlot());
+            boolean expired = shiftDate.isBefore(today);
+            if (!expired && times != null) {
+                LocalDateTime graceEnd = shiftDate.atTime(times[1]).plusMinutes(30);
+                expired = now.isAfter(graceEnd);
+            }
+            if (expired) {
+                s.setStatus("COMPLETED");
+                if (s.getCheckOutTime() == null || s.getCheckOutTime().isBlank()) {
+                    s.setCheckOutTime(times != null ? times[1].format(TIME_FORMAT) : "23:59");
+                }
+                String autoNote = "[Hệ thống tự đóng ca do quá giờ/qua ngày]";
+                String existingNotes = s.getNotes() != null ? s.getNotes().trim() : "";
+                if (!existingNotes.contains(autoNote)) {
+                    s.setNotes(existingNotes.isEmpty() ? autoNote : existingNotes + " | " + autoNote);
+                }
+                toSave.add(s);
+            }
+        }
+        if (!toSave.isEmpty()) {
+            staffShiftRepository.saveAll(toSave);
+        }
     }
 
     private void ensureShiftActor(User actor, StaffShift shift) {

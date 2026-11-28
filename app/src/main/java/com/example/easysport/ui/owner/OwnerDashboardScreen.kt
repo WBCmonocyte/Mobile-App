@@ -104,6 +104,7 @@ import com.example.easysport.ui.common.ProKpiCard
 import com.example.easysport.ui.common.ProSectionHeader
 import com.example.easysport.ui.common.ProStatusDotPill
 import com.example.easysport.ui.common.ProTopBar
+import com.example.easysport.ui.common.StaffOwnerProfileDialog
 import com.example.easysport.ui.common.vnd
 import com.example.easysport.ui.staff.BookingStatusBadge
 import com.example.easysport.ui.staff.EmptyStateCard
@@ -148,6 +149,7 @@ fun OwnerDashboardScreen(
     var isRefreshing by remember { mutableStateOf(false) }
 
     var showLogoutConfirm by remember { mutableStateOf(false) }
+    var showProfileDialog by remember { mutableStateOf(false) }
     var showAssignSheet by remember { mutableStateOf(false) }
     var assignInitialDate by remember { mutableStateOf<String?>(null) }
     var assignInitialSlot by remember { mutableStateOf<String?>(null) }
@@ -248,6 +250,7 @@ fun OwnerDashboardScreen(
                 onBack = if (currentScreen != OwnerScreen.HOME) {
                     { currentScreen = OwnerScreen.HOME }
                 } else null,
+                onProfileClick = { showProfileDialog = true },
             )
         },
         bottomBar = {
@@ -381,6 +384,15 @@ fun OwnerDashboardScreen(
                 OwnerScreen.BOOKINGS -> OwnerBookingsScreen(overview = overview)
             }
         }
+    }
+
+    if (showProfileDialog) {
+        StaffOwnerProfileDialog(
+            user = currentUser,
+            roleLabel = "CHỦ SÂN",
+            onDismiss = { showProfileDialog = false },
+            onRequestLogout = { showLogoutConfirm = true },
+        )
     }
 
     if (showLogoutConfirm) {

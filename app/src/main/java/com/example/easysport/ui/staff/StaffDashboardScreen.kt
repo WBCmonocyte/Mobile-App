@@ -82,6 +82,7 @@ import com.example.easysport.ui.common.ProHeroBrush
 import com.example.easysport.ui.common.ProSectionHeader
 import com.example.easysport.ui.common.ProStatusDotPill
 import com.example.easysport.ui.common.ProTopBar
+import com.example.easysport.ui.common.StaffOwnerProfileDialog
 import com.example.easysport.ui.common.vnd
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -123,6 +124,7 @@ fun StaffDashboardScreen(
     var isSubmittingReport by remember { mutableStateOf(false) }
 
     var showLogoutConfirm by remember { mutableStateOf(false) }
+    var showProfileDialog by remember { mutableStateOf(false) }
     var showWalkInSheet by remember { mutableStateOf(false) }
     var walkInPreselectedCourt by remember { mutableStateOf<Court?>(null) }
     var walkInPreselectedField by remember { mutableStateOf<String?>(null) }
@@ -155,7 +157,7 @@ fun StaffDashboardScreen(
 
     val todayStr = remember { LocalDate.now().format(DateTimeFormatter.ofPattern("dd/MM/yyyy")) }
     val currentShiftForContext = remember(myShifts, todayStr) {
-        myShifts.firstOrNull { it.status == "ACTIVE" }
+        myShifts.firstOrNull { it.status == "ACTIVE" && it.shiftDate == todayStr }
             ?: myShifts.firstOrNull { it.status == "UPCOMING" && it.shiftDate == todayStr }
             ?: myShifts.lastOrNull { it.status == "COMPLETED" && it.shiftDate == todayStr }
     }
@@ -190,6 +192,7 @@ fun StaffDashboardScreen(
                 isRefreshing = isRefreshing,
                 onRefresh = { refreshAll() },
                 onLogout = { showLogoutConfirm = true },
+                onProfileClick = { showProfileDialog = true },
             )
         },
         bottomBar = {
@@ -562,6 +565,15 @@ fun StaffDashboardScreen(
                         .onFailure { Toast.makeText(context, it.message, Toast.LENGTH_LONG).show() }
                 }
             }
+        )
+    }
+
+    if (showProfileDialog) {
+        StaffOwnerProfileDialog(
+            user = currentUser,
+            roleLabel = "NHÂN VIÊN",
+            onDismiss = { showProfileDialog = false },
+            onRequestLogout = { showLogoutConfirm = true },
         )
     }
 

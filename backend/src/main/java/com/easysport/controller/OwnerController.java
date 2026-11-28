@@ -328,6 +328,7 @@ public class OwnerController {
     ) {
         requireOwner(authHeader);
         List<StaffShift> shifts = staffShiftRepository.findAllByOrderByCreatedAtDesc();
+        shiftPlanningService.autoCloseExpiredActiveShifts(shifts);
         List<User> staffList = userRepository.findByRole("STAFF");
         List<Map<String, String>> sanitizedStaff = new ArrayList<>();
         for (User u : staffList) {

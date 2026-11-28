@@ -21,6 +21,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.Logout
+import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
@@ -181,6 +182,7 @@ fun ProTopBar(
     onRefresh: () -> Unit,
     onLogout: () -> Unit,
     onBack: (() -> Unit)? = null,
+    onProfileClick: (() -> Unit)? = null,
 ) {
     Column(
         modifier = Modifier
@@ -245,6 +247,25 @@ fun ProTopBar(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
+                if (onProfileClick != null) {
+                    Surface(
+                        color = ProColors.PrimarySoft,
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .size(38.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable(onClick = onProfileClick),
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = Icons.Rounded.Person,
+                                contentDescription = "Tài khoản cá nhân",
+                                tint = ProColors.Primary,
+                                modifier = Modifier.size(19.dp),
+                            )
+                        }
+                    }
+                }
                 Surface(
                     color = EsColors.Surface,
                     shape = RoundedCornerShape(12.dp),
