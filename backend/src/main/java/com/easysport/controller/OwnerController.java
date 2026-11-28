@@ -501,6 +501,7 @@ public class OwnerController {
         List<StaffShift> shifts = staffShiftRepository.findAllByOrderByCreatedAtDesc().stream()
                 .filter(s -> s.getCourtId() == null || myCourtIds.contains(s.getCourtId()))
                 .toList();
+        shiftPlanningService.autoCloseExpiredActiveShifts(shifts);
         List<User> staffList = userRepository.findByRole("STAFF");
         List<Map<String, String>> sanitizedStaff = new ArrayList<>();
         for (User u : staffList) {

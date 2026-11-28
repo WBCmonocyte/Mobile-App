@@ -1,5 +1,17 @@
 package com.example.easysport.data.model
 
+data class StaffQrCheckoutSession(
+    val paymentId: String,
+    val orderInvoiceNumber: String,
+    val checkoutUrl: String,
+    val amount: Int,
+    val status: String,
+    val isPaid: Boolean,
+    val isExpired: Boolean,
+    val expiresAt: String? = null,
+    val serverNow: String? = null,
+)
+
 data class StaffBookingItem(
     val id: String,
     val courtId: String,

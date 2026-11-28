@@ -6,6 +6,7 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.browser.customtabs.CustomTabsIntent
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
 import androidx.compose.foundation.Canvas
@@ -35,6 +36,7 @@ import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Payments
 import androidx.compose.material.icons.rounded.QrCode2
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Remove
 import androidx.compose.material.icons.rounded.Schedule
 import androidx.compose.material.icons.rounded.Search
@@ -66,8 +68,10 @@ import com.example.easysport.data.model.PosOrderItemRequest
 import com.example.easysport.data.model.PosSaleItem
 import com.example.easysport.data.model.ShiftReportItem
 import com.example.easysport.data.model.StaffBookingItem
+import com.example.easysport.data.model.StaffQrCheckoutSession
 import com.example.easysport.data.model.StaffShiftItem
 import com.example.easysport.data.model.StaffShiftSummary
+import com.example.easysport.data.remote.PaymentApiClient
 import com.example.easysport.data.remote.StaffOwnerApiClient
 import com.example.easysport.data.repository.CourtStore
 import com.example.easysport.data.repository.UserStore
@@ -82,6 +86,7 @@ import com.example.easysport.ui.common.ProHeroBrush
 import com.example.easysport.ui.common.ProSectionHeader
 import com.example.easysport.ui.common.ProStatusDotPill
 import com.example.easysport.ui.common.ProTopBar
+import com.example.easysport.ui.common.StaffOwnerProfileDialog
 import com.example.easysport.ui.common.vnd
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -92,6 +97,7 @@ import java.time.DayOfWeek
 import java.time.Duration
 import java.time.LocalDate
 import java.time.LocalTime
+import java.time.YearMonth
 import java.time.format.DateTimeFormatter
 import java.time.temporal.TemporalAdjusters
 
@@ -123,6 +129,7 @@ fun StaffDashboardScreen(
     var isSubmittingReport by remember { mutableStateOf(false) }
 
     var showLogoutConfirm by remember { mutableStateOf(false) }
+    var showProfileDialog by remember { mutableStateOf(false) }
     var showWalkInSheet by remember { mutableStateOf(false) }
     var walkInPreselectedCourt by remember { mutableStateOf<Court?>(null) }
     var walkInPreselectedField by remember { mutableStateOf<String?>(null) }
@@ -155,7 +162,7 @@ fun StaffDashboardScreen(
 
     val todayStr = remember { LocalDate.now().format(DateTimeFormatter.ofPattern("dd/MM/yyyy")) }
     val currentShiftForContext = remember(myShifts, todayStr) {
-        myShifts.firstOrNull { it.status == "ACTIVE" }
+        myShifts.firstOrNull { it.status == "ACTIVE" && it.shiftDate == todayStr }
             ?: myShifts.firstOrNull { it.status == "UPCOMING" && it.shiftDate == todayStr }
             ?: myShifts.lastOrNull { it.status == "COMPLETED" && it.shiftDate == todayStr }
     }
@@ -183,13 +190,15 @@ fun StaffDashboardScreen(
     Scaffold(
         containerColor = ProColors.Canvas,
         topBar = {
+            val staffName = currentUser?.name?.takeIf { it.isNotBlank() } ?: "Nhân viên"
             ProTopBar(
-                title = currentTab.title,
-                subtitle = "${currentUser?.name ?: "Nhân viên"} · ${assignedCourt?.name ?: "Chi nhánh"}",
+                title = staffName,
+                subtitle = "Nhân viên",
                 roleBadge = "NHÂN VIÊN",
                 isRefreshing = isRefreshing,
                 onRefresh = { refreshAll() },
                 onLogout = { showLogoutConfirm = true },
+                onProfileClick = { showProfileDialog = true },
             )
         },
         bottomBar = {
@@ -562,6 +571,15 @@ fun StaffDashboardScreen(
                         .onFailure { Toast.makeText(context, it.message, Toast.LENGTH_LONG).show() }
                 }
             }
+        )
+    }
+
+    if (showProfileDialog) {
+        StaffOwnerProfileDialog(
+            user = currentUser,
+            roleLabel = "NHÂN VIÊN",
+            onDismiss = { showProfileDialog = false },
+            onRequestLogout = { showLogoutConfirm = true },
         )
     }
 
@@ -2277,6 +2295,8 @@ private fun StaffShiftCalendarCard(
     val dayMonthFmt = remember { DateTimeFormatter.ofPattern("dd/MM") }
     val sunday = remember(currentMonday) { currentMonday.plusDays(6) }
     val dateFormatter = remember { DateTimeFormatter.ofPattern("dd/MM/yyyy") }
+    var weekMode by remember { mutableStateOf(true) }
+    var currentYearMonth by remember { mutableStateOf(YearMonth.from(LocalDate.now())) }
     val isCurrentWeek = remember(currentMonday) {
         val now = LocalDate.now()
         val thisMonday = now.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY))
@@ -2303,7 +2323,16 @@ private fun StaffShiftCalendarCard(
 
     ProCard {
         Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            // Header: week navigation
+            // Chuyển chế độ Tuần / Tháng đồng bộ với Client
+            EsSegmentedControl(
+                leftLabel = "Lịch tuần",
+                rightLabel = "Lịch tháng",
+                isLeftSelected = weekMode,
+                onSelectLeft = { weekMode = true },
+                onSelectRight = { weekMode = false },
+            )
+
+            // Header: week or month navigation
             Row(
                 Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -2311,14 +2340,25 @@ private fun StaffShiftCalendarCard(
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(
-                        text = "Tuần ${currentMonday.format(dayMonthFmt)} - ${sunday.format(dayMonthFmt)}",
+                        text = if (weekMode) {
+                            "Tuần ${currentMonday.format(dayMonthFmt)} - ${sunday.format(dayMonthFmt)}"
+                        } else {
+                            "Tháng ${currentYearMonth.monthValue}, ${currentYearMonth.year}"
+                        },
                         fontWeight = FontWeight.Bold,
                         fontSize = 14.5.sp,
                         color = ProColors.Ink
                     )
-                    if (isCurrentWeek) {
+                    if (weekMode && isCurrentWeek) {
                         ProStatusDotPill(
                             text = "Tuần này",
+                            dotColor = ProColors.Primary,
+                            textColor = ProColors.Primary,
+                            bgColor = ProColors.PrimarySoft
+                        )
+                    } else if (!weekMode && currentYearMonth == YearMonth.now()) {
+                        ProStatusDotPill(
+                            text = "Tháng này",
                             dotColor = ProColors.Primary,
                             textColor = ProColors.Primary,
                             bgColor = ProColors.PrimarySoft
@@ -2327,28 +2367,44 @@ private fun StaffShiftCalendarCard(
                 }
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(onClick = onPrevWeek, modifier = Modifier.size(32.dp)) {
+                    IconButton(
+                        onClick = {
+                            if (weekMode) onPrevWeek() else currentYearMonth = currentYearMonth.minusMonths(1)
+                        },
+                        modifier = Modifier.size(32.dp)
+                    ) {
                         Icon(
                             Icons.Rounded.ChevronLeft,
-                            contentDescription = "Tuần trước",
+                            contentDescription = if (weekMode) "Tuần trước" else "Tháng trước",
                             tint = ProColors.SubInk,
                             modifier = Modifier.size(20.dp)
                         )
                     }
-                    if (!isCurrentWeek) {
-                        IconButton(onClick = onResetToday, modifier = Modifier.size(32.dp)) {
+                    if ((weekMode && !isCurrentWeek) || (!weekMode && currentYearMonth != YearMonth.now())) {
+                        IconButton(
+                            onClick = {
+                                currentYearMonth = YearMonth.now()
+                                onResetToday()
+                            },
+                            modifier = Modifier.size(32.dp)
+                        ) {
                             Icon(
                                 Icons.Rounded.Today,
-                                contentDescription = "Về tuần này",
+                                contentDescription = "Về hôm nay",
                                 tint = ProColors.Primary,
                                 modifier = Modifier.size(18.dp)
                             )
                         }
                     }
-                    IconButton(onClick = onNextWeek, modifier = Modifier.size(32.dp)) {
+                    IconButton(
+                        onClick = {
+                            if (weekMode) onNextWeek() else currentYearMonth = currentYearMonth.plusMonths(1)
+                        },
+                        modifier = Modifier.size(32.dp)
+                    ) {
                         Icon(
                             Icons.Rounded.ChevronRight,
-                            contentDescription = "Tuần sau",
+                            contentDescription = if (weekMode) "Tuần sau" else "Tháng sau",
                             tint = ProColors.SubInk,
                             modifier = Modifier.size(20.dp)
                         )
@@ -2356,66 +2412,147 @@ private fun StaffShiftCalendarCard(
                 }
             }
 
-            // 7-day strip
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                weekDays.forEach { day ->
-                    val isSelected = selectedDate == day.dateStr
-                    val isToday = day.dateStr == todayStr
-                    val dayShifts = shifts.filter { it.shiftDate == day.dateStr }
-                    val hasActive = dayShifts.any { it.status == "ACTIVE" }
-                    val hasUpcoming = dayShifts.any { it.status == "UPCOMING" }
-                    val hasCompleted = dayShifts.any { it.status == "COMPLETED" }
+            if (weekMode) {
+                // 7-day strip
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                    weekDays.forEach { day ->
+                        val isSelected = selectedDate == day.dateStr
+                        val isToday = day.dateStr == todayStr
+                        val dayShifts = shifts.filter { it.shiftDate == day.dateStr }
+                        val hasActive = dayShifts.any { it.status == "ACTIVE" }
+                        val hasUpcoming = dayShifts.any { it.status == "UPCOMING" }
+                        val hasCompleted = dayShifts.any { it.status == "COMPLETED" }
 
-                    val dotColor = when {
-                        hasActive -> ProColors.Emerald
-                        hasUpcoming -> ProColors.Primary
-                        hasCompleted -> ProColors.Muted
-                        else -> Color.Transparent
-                    }
+                        val dotColor = when {
+                            hasActive -> ProColors.Emerald
+                            hasUpcoming -> ProColors.Primary
+                            hasCompleted -> ProColors.Muted
+                            else -> Color.Transparent
+                        }
 
-                    Column(
-                        modifier = Modifier
-                            .weight(1f)
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(
-                                if (isSelected) ProColors.Primary
-                                else if (isToday) ProColors.PrimarySoft.copy(alpha = 0.6f)
-                                else Color.White
+                        Column(
+                            modifier = Modifier
+                                .weight(1f)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(
+                                    if (isSelected) ProColors.Primary
+                                    else if (isToday) ProColors.PrimarySoft.copy(alpha = 0.6f)
+                                    else Color.White
+                                )
+                                .border(
+                                    width = if (isSelected || isToday) 1.5.dp else 1.dp,
+                                    color = if (isSelected) ProColors.Primary else if (isToday) ProColors.Primary.copy(alpha = 0.7f) else ProColors.Border,
+                                    shape = RoundedCornerShape(12.dp)
+                                )
+                                .clickable {
+                                    if (isSelected) onSelectDate(null) else onSelectDate(day.dateStr)
+                                }
+                                .padding(vertical = 8.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                text = day.weekday,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = if (isSelected) Color.White.copy(alpha = 0.85f) else ProColors.Muted
                             )
-                            .border(
-                                width = if (isSelected || isToday) 1.5.dp else 1.dp,
-                                color = if (isSelected) ProColors.Primary else if (isToday) ProColors.Primary.copy(alpha = 0.7f) else ProColors.Border,
-                                shape = RoundedCornerShape(12.dp)
+                            Spacer(Modifier.height(2.dp))
+                            Text(
+                                text = day.date.dayOfMonth.toString(),
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (isSelected) Color.White else ProColors.Ink
                             )
-                            .clickable {
-                                if (isSelected) onSelectDate(null) else onSelectDate(day.dateStr)
+                            Spacer(Modifier.height(4.dp))
+                            if (dayShifts.isNotEmpty()) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(6.dp)
+                                        .clip(CircleShape)
+                                        .background(if (isSelected) Color.White else dotColor)
+                                )
+                            } else {
+                                Spacer(Modifier.size(6.dp))
                             }
-                            .padding(vertical = 8.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
+                        }
+                    }
+                }
+            } else {
+                // Lưới Lịch tháng (7 cột T2..CN đồng bộ với Client)
+                val headers = listOf("T2", "T3", "T4", "T5", "T6", "T7", "CN")
+                Row(Modifier.fillMaxWidth()) {
+                    headers.forEach { h ->
                         Text(
-                            text = day.weekday,
+                            text = h,
+                            modifier = Modifier.weight(1f),
+                            textAlign = TextAlign.Center,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.SemiBold,
-                            color = if (isSelected) Color.White.copy(alpha = 0.85f) else ProColors.Muted
+                            color = ProColors.Muted
                         )
-                        Spacer(Modifier.height(2.dp))
-                        Text(
-                            text = day.date.dayOfMonth.toString(),
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = if (isSelected) Color.White else ProColors.Ink
-                        )
-                        Spacer(Modifier.height(4.dp))
-                        if (dayShifts.isNotEmpty()) {
-                            Box(
-                                modifier = Modifier
-                                    .size(6.dp)
-                                    .clip(CircleShape)
-                                    .background(if (isSelected) Color.White else dotColor)
-                            )
-                        } else {
-                            Spacer(Modifier.size(6.dp))
+                    }
+                }
+                val daysInMonth = currentYearMonth.lengthOfMonth()
+                val firstOffset = currentYearMonth.atDay(1).dayOfWeek.value - 1
+                val totalCells = ((firstOffset + daysInMonth + 6) / 7) * 7
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    for (row in 0 until (totalCells / 7)) {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            for (col in 0 until 7) {
+                                val cellIdx = row * 7 + col
+                                val dayNum = cellIdx - firstOffset + 1
+                                if (dayNum in 1..daysInMonth) {
+                                    val d = currentYearMonth.atDay(dayNum)
+                                    val dStr = d.format(dateFormatter)
+                                    val isSelected = selectedDate == dStr
+                                    val isToday = dStr == todayStr
+                                    val dayShifts = shifts.filter { it.shiftDate == dStr }
+                                    val dotColor = when {
+                                        dayShifts.any { it.status == "ACTIVE" } -> ProColors.Emerald
+                                        dayShifts.any { it.status == "UPCOMING" } -> ProColors.Primary
+                                        dayShifts.isNotEmpty() -> ProColors.Muted
+                                        else -> Color.Transparent
+                                    }
+                                    Column(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .clip(RoundedCornerShape(10.dp))
+                                            .background(
+                                                when {
+                                                    isSelected -> ProColors.Primary
+                                                    isToday -> ProColors.PrimarySoft.copy(alpha = 0.7f)
+                                                    else -> Color.Transparent
+                                                }
+                                            )
+                                            .border(
+                                                width = if (isSelected || isToday) 1.dp else 0.dp,
+                                                color = if (isSelected || isToday) ProColors.Primary else Color.Transparent,
+                                                shape = RoundedCornerShape(10.dp)
+                                            )
+                                            .clickable {
+                                                if (isSelected) onSelectDate(null) else onSelectDate(dStr)
+                                            }
+                                            .padding(vertical = 6.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally
+                                    ) {
+                                        Text(
+                                            text = dayNum.toString(),
+                                            fontSize = 13.sp,
+                                            fontWeight = if (isSelected || isToday) FontWeight.Bold else FontWeight.Medium,
+                                            color = if (isSelected) Color.White else ProColors.Ink
+                                        )
+                                        Spacer(Modifier.height(2.dp))
+                                        Box(
+                                            modifier = Modifier
+                                                .size(5.dp)
+                                                .clip(CircleShape)
+                                                .background(if (isSelected && dayShifts.isNotEmpty()) Color.White else dotColor)
+                                        )
+                                    }
+                                } else {
+                                    Spacer(Modifier.weight(1f))
+                                }
+                            }
                         }
                     }
                 }
@@ -2861,14 +2998,24 @@ private fun VietQrPaymentDialog(
     onDismiss: () -> Unit,
     onConfirmReceived: () -> Unit,
 ) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+
+    var session by remember(amount, transferContent) { mutableStateOf<StaffQrCheckoutSession?>(null) }
+    var isCreating by remember(amount, transferContent) { mutableStateOf(true) }
+    var isChecking by remember(amount, transferContent) { mutableStateOf(false) }
+    var errorMsg by remember(amount, transferContent) { mutableStateOf<String?>(null) }
+    var remainingSeconds by remember(amount, transferContent) { mutableIntStateOf(300) }
+    var confirmedOnce by remember(amount, transferContent) { mutableStateOf(false) }
     var qrBitmap by remember(amount, transferContent) { mutableStateOf<Bitmap?>(null) }
     var isLoadingQr by remember(amount, transferContent) { mutableStateOf(true) }
 
-    LaunchedEffect(amount, transferContent) {
+    LaunchedEffect(session?.orderInvoiceNumber, amount) {
+        val addInfo = session?.orderInvoiceNumber?.takeIf { it.isNotBlank() } ?: transferContent
         isLoadingQr = true
         qrBitmap = withContext(Dispatchers.IO) {
             runCatching {
-                val encodedInfo = URLEncoder.encode(transferContent, "UTF-8")
+                val encodedInfo = URLEncoder.encode(addInfo, "UTF-8")
                 val encodedName = URLEncoder.encode("SAN BONG EASYSPORT", "UTF-8")
                 val url = "https://img.vietqr.io/image/MB-0987654321-compact2.png?amount=$amount&addInfo=$encodedInfo&accountName=$encodedName"
                 URL(url).openStream().use { BitmapFactory.decodeStream(it) }
@@ -2877,6 +3024,91 @@ private fun VietQrPaymentDialog(
         isLoadingQr = false
     }
 
+    fun openSepayCheckout(checkoutPath: String) {
+        val resolved = PaymentApiClient.resolveUrl(checkoutPath)
+        if (resolved.isBlank()) return
+        try {
+            CustomTabsIntent.Builder().setShowTitle(true).build().launchUrl(context, Uri.parse(resolved))
+        } catch (_: Exception) {
+            runCatching {
+                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(resolved)))
+            }.onFailure {
+                errorMsg = "Không thể mở trình duyệt thanh toán: ${it.localizedMessage}"
+            }
+        }
+    }
+
+    fun checkStatusNow(manual: Boolean = false) {
+        val current = session ?: return
+        if (confirmedOnce || isChecking) return
+        scope.launch {
+            isChecking = true
+            StaffOwnerApiClient.getStaffQrStatus(current.paymentId)
+                .onSuccess { updated ->
+                    session = updated
+                    if (updated.isPaid && !confirmedOnce) {
+                        confirmedOnce = true
+                        Toast.makeText(context, "SePay đã xác nhận nhận đủ ${amount.vnd()} đ!", Toast.LENGTH_SHORT).show()
+                        onConfirmReceived()
+                    } else if (updated.isExpired) {
+                        remainingSeconds = 0
+                        errorMsg = "Phiên thanh toán 5 phút đã hết hạn. Vui lòng tạo lại."
+                    } else if (manual) {
+                        Toast.makeText(context, "Chưa nhận được tiền từ SePay, vui lòng đợi giây lát.", Toast.LENGTH_SHORT).show()
+                    }
+                }
+                .onFailure {
+                    if (manual) errorMsg = it.message ?: "Lỗi kiểm tra trạng thái SePay"
+                }
+            isChecking = false
+        }
+    }
+
+    // 1. Khởi tạo phiên thanh toán SePay trên Backend ngay khi mở hộp thoại
+    LaunchedEffect(amount, transferContent) {
+        isCreating = true
+        errorMsg = null
+        StaffOwnerApiClient.createStaffQrCheckout(
+            amount = amount,
+            description = summary.ifBlank { transferContent },
+            referenceId = transferContent,
+        ).onSuccess { created ->
+            session = created
+            remainingSeconds = 300
+        }.onFailure {
+            errorMsg = it.message ?: "Không thể kết nối cổng SePay Backend"
+        }
+        isCreating = false
+    }
+
+    // 2. Đồng hồ đếm ngược 5 phút giống luồng Khách hàng
+    LaunchedEffect(session?.paymentId, session?.status) {
+        while (session != null && !confirmedOnce && !(session!!.isPaid || session!!.isExpired) && remainingSeconds > 0) {
+            kotlinx.coroutines.delay(1000)
+            remainingSeconds = (remainingSeconds - 1).coerceAtLeast(0)
+        }
+    }
+
+    // 3. Tự động polling trạng thái thanh toán SePay mỗi 2.5 giây
+    LaunchedEffect(session?.paymentId) {
+        val pId = session?.paymentId ?: return@LaunchedEffect
+        while (!confirmedOnce && session?.isPaid != true && session?.isExpired != true) {
+            kotlinx.coroutines.delay(2500)
+            StaffOwnerApiClient.getStaffQrStatus(pId).onSuccess { updated ->
+                session = updated
+                if (updated.isPaid && !confirmedOnce) {
+                    confirmedOnce = true
+                    Toast.makeText(context, "SePay đã xác nhận nhận đủ ${amount.vnd()} đ!", Toast.LENGTH_SHORT).show()
+                    onConfirmReceived()
+                }
+            }
+        }
+    }
+
+    val mins = remainingSeconds / 60
+    val secs = remainingSeconds % 60
+    val countdownText = "%02d:%02d".format(mins, secs)
+
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = Color.White,
@@ -2884,72 +3116,149 @@ private fun VietQrPaymentDialog(
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Rounded.QrCode2, contentDescription = null, tint = EsColors.Primary)
                 Spacer(Modifier.width(8.dp))
-                Text("Quét Mã VietQR Thanh Toán", fontWeight = FontWeight.Bold, fontSize = 17.sp, color = EsColors.Title)
+                Column {
+                    Text("Thanh Toán SePay (VietQR)", fontWeight = FontWeight.Bold, fontSize = 17.sp, color = EsColors.Title)
+                    Text("Đồng bộ tự động qua Backend SePay", fontSize = 11.5.sp, color = EsColors.Body)
+                }
             }
         },
         text = {
             Column(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalAlignment = Alignment.CenterHorizontally
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Text(summary, fontSize = 12.5.sp, color = EsColors.Body, textAlign = TextAlign.Center)
-                Spacer(Modifier.height(10.dp))
-                Box(
-                    modifier = Modifier
-                        .size(210.dp)
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(EsColors.Surface)
-                        .padding(8.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    when {
-                        isLoadingQr -> CircularProgressIndicator(color = EsColors.Primary)
-                        qrBitmap != null -> Image(
-                            bitmap = qrBitmap!!.asImageBitmap(),
-                            contentDescription = "Mã VietQR",
-                            modifier = Modifier.fillMaxSize(),
-                            contentScale = ContentScale.Fit
-                        )
-                        else -> FallbackQrMatrix(seedText = "$amount|$transferContent")
+
+                when {
+                    isCreating -> {
+                        Box(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                CircularProgressIndicator(color = EsColors.Primary, modifier = Modifier.size(32.dp))
+                                Spacer(Modifier.height(10.dp))
+                                Text("Đang khởi tạo phiên SePay...", fontSize = 13.sp, color = EsColors.Body)
+                            }
+                        }
+                    }
+                    session != null -> {
+                        val s = session!!
+                        // Khung hiển thị mã VietQR trực tiếp ngay trên hộp thoại
+                        Box(
+                            modifier = Modifier
+                                .size(200.dp)
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(EsColors.Surface)
+                                .border(1.dp, ProColors.Border, RoundedCornerShape(14.dp))
+                                .padding(8.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            when {
+                                isLoadingQr -> CircularProgressIndicator(color = EsColors.Primary)
+                                qrBitmap != null -> Image(
+                                    bitmap = qrBitmap!!.asImageBitmap(),
+                                    contentDescription = "Mã VietQR SePay",
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentScale = ContentScale.Fit
+                                )
+                                else -> FallbackQrMatrix(seedText = "$amount|${s.orderInvoiceNumber}")
+                            }
+                        }
+
+                        Card(
+                            colors = CardDefaults.cardColors(containerColor = EsColors.Surface),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                    Text("Số tiền cần thu:", fontSize = 12.5.sp, color = EsColors.Body)
+                                    Text("${amount.vnd()} đ", fontSize = 15.sp, fontWeight = FontWeight.ExtraBold, color = EsColors.Primary)
+                                }
+                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                    Text("Mã hóa đơn SePay:", fontSize = 12.sp, color = EsColors.Body)
+                                    Text(s.orderInvoiceNumber, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = EsColors.Title)
+                                }
+                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                    Text("Trạng thái:", fontSize = 12.sp, color = EsColors.Body)
+                                    Text(
+                                        text = when {
+                                            s.isPaid -> "Đã thanh toán"
+                                            s.isExpired || remainingSeconds == 0 -> "Đã hết hạn"
+                                            else -> "Chờ khách quét QR ($countdownText)"
+                                        },
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = when {
+                                            s.isPaid -> ProColors.Emerald
+                                            s.isExpired || remainingSeconds == 0 -> ProColors.Rose
+                                            else -> ProColors.Amber
+                                        }
+                                    )
+                                }
+                            }
+                        }
+
+                        if (!s.isPaid && !s.isExpired && remainingSeconds > 0) {
+                            Button(
+                                onClick = { openSepayCheckout(s.checkoutUrl) },
+                                colors = ButtonDefaults.buttonColors(containerColor = EsColors.Primary),
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.fillMaxWidth().height(46.dp)
+                            ) {
+                                Icon(Icons.Rounded.QrCode2, contentDescription = null, modifier = Modifier.size(18.dp))
+                                Spacer(Modifier.width(8.dp))
+                                Text("Mở cổng SePay (VietQR)", fontWeight = FontWeight.Bold)
+                            }
+
+                            OutlinedButton(
+                                onClick = { checkStatusNow(manual = true) },
+                                enabled = !isChecking,
+                                shape = RoundedCornerShape(12.dp),
+                                modifier = Modifier.fillMaxWidth().height(42.dp)
+                            ) {
+                                if (isChecking) {
+                                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                                } else {
+                                    Icon(Icons.Rounded.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                                    Spacer(Modifier.width(6.dp))
+                                    Text("Kiểm tra trạng thái thanh toán", fontSize = 13.sp)
+                                }
+                            }
+
+                            Text(
+                                text = "Hệ thống tự động cập nhật ngay khi SePay / trang Demo xác nhận nhận tiền.",
+                                fontSize = 11.5.sp,
+                                color = EsColors.Body,
+                                textAlign = TextAlign.Center
+                            )
+                        }
                     }
                 }
-                Spacer(Modifier.height(10.dp))
-                Card(
-                    colors = CardDefaults.cardColors(containerColor = EsColors.Surface),
-                    shape = RoundedCornerShape(10.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Ngân hàng:", fontSize = 12.sp, color = EsColors.Body)
-                            Text("MB Bank (Quân đội)", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = EsColors.Title)
-                        }
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Số tài khoản:", fontSize = 12.sp, color = EsColors.Body)
-                            Text("0987654321", fontSize = 12.sp, fontWeight = FontWeight.Bold, color = EsColors.Title)
-                        }
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Số tiền:", fontSize = 12.sp, color = EsColors.Body)
-                            Text("${amount.vnd()} đ", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = EsColors.Primary)
-                        }
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("Nội dung CK:", fontSize = 12.sp, color = EsColors.Body)
-                            Text(transferContent, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = EsColors.Success)
-                        }
-                    }
+
+                if (!errorMsg.isNullOrBlank()) {
+                    Text(
+                        text = errorMsg!!,
+                        fontSize = 12.sp,
+                        color = ProColors.Rose,
+                        textAlign = TextAlign.Center
+                    )
                 }
             }
         },
         confirmButton = {
-            Button(
-                onClick = onConfirmReceived,
-                colors = ButtonDefaults.buttonColors(containerColor = EsColors.Primary)
-            ) {
-                Text("Đã nhận tiền")
+            if (!isCreating && !confirmedOnce) {
+                TextButton(onClick = onConfirmReceived) {
+                    Text("Xác nhận thủ công", color = ProColors.Emerald, fontWeight = FontWeight.SemiBold)
+                }
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Hủy") }
+            TextButton(onClick = onDismiss) { Text("Đóng") }
         }
     )
 }

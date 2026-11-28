@@ -55,6 +55,25 @@ public class PaymentController {
             return ResponseEntity.ok(renderInfoPage("Giao dịch này đã được thanh toán thành công.", "success"));
         }
 
+        if (SepayService.isStaffCounterPayment(payment)) {
+            if (!"PENDING".equalsIgnoreCase(payment.getStatus())
+                    || (payment.getExpiresAt() != null && java.time.LocalDateTime.now(clock).isAfter(payment.getExpiresAt()))) {
+                return ResponseEntity.status(HttpStatus.GONE)
+                        .body(renderErrorPage("Phiên thanh toán QR tại quầy đã hết hạn. Vui lòng tạo mã mới trên ứng dụng."));
+            }
+            try {
+                String html = sepayService.renderStaffCheckoutHtml(payment);
+                HttpHeaders headers = new HttpHeaders();
+                headers.setCacheControl("no-store");
+                headers.set("Referrer-Policy", "no-referrer");
+                headers.setContentType(new MediaType("text", "html", StandardCharsets.UTF_8));
+                return new ResponseEntity<>(html, headers, HttpStatus.OK);
+            } catch (Exception e) {
+                return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                        .body(renderErrorPage("Không thể khởi tạo cổng thanh toán: " + e.getMessage()));
+            }
+        }
+
         Optional<Booking> bookingOpt = bookingRepository.findById(payment.getBookingId());
         if (bookingOpt.isEmpty()) {
             return ResponseEntity.status(HttpStatus.NOT_FOUND)
@@ -97,6 +116,14 @@ public class PaymentController {
             return ResponseEntity.status(HttpStatus.NOT_FOUND).body(renderErrorPage("Không tìm thấy phiên thanh toán."));
         }
         Payment payment = paymentOpt.get();
+        if (SepayService.isStaffCounterPayment(payment)) {
+            boolean ok = sepayService.confirmStaffMockPayment(payment);
+            if (ok) {
+                return ResponseEntity.ok(renderInfoPage("Thanh toán thành công!<br/>Vui lòng quay lại màn hình Thu ngân <b>EasySport</b> để hoàn tất.", "success"));
+            } else {
+                return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(renderErrorPage("Không thể xác nhận thanh toán (phiên đã hết hạn hoặc không hợp lệ)."));
+            }
+        }
         Optional<Booking> bookingOpt = bookingRepository.findById(payment.getBookingId());
         if (bookingOpt.isEmpty()) {
             return ResponseEntity.status(HttpStatus.NOT_FOUND).body(renderErrorPage("Không tìm thấy đơn đặt sân."));
