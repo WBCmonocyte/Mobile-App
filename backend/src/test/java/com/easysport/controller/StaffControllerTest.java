@@ -2,6 +2,8 @@ package com.easysport.controller;
 
 import com.easysport.dto.ApiResponse;
 import com.easysport.entity.Booking;
+import com.easysport.entity.InventoryItem;
+import com.easysport.entity.InventoryTransaction;
 import com.easysport.entity.PosSale;
 import com.easysport.entity.ShiftReport;
 import com.easysport.entity.StaffShift;
@@ -9,6 +11,8 @@ import com.easysport.entity.User;
 import com.easysport.entity.UserSession;
 import com.easysport.repository.BookingRepository;
 import com.easysport.repository.CourtRepository;
+import com.easysport.repository.InventoryItemRepository;
+import com.easysport.repository.InventoryTransactionRepository;
 import com.easysport.repository.PosSaleRepository;
 import com.easysport.repository.ShiftReportRepository;
 import com.easysport.repository.StaffShiftRepository;
@@ -443,5 +447,64 @@ class StaffControllerTest {
         assertNull(updated.getConfirmedBy());
         assertEquals(220000, updated.getCashAmount());
         assertTrue(updated.getHandoverNote().contains("NV giải trình: Đã bù đủ 20k tiền lẻ"));
+    }
+
+    @Test
+    void retailPosDeductsInventoryStockAndRejectsInsufficientOrCrossCourtItems() {
+        InventoryItemRepository invRepo = mock(InventoryItemRepository.class);
+        InventoryTransactionRepository txRepo = mock(InventoryTransactionRepository.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(controller, "inventoryItemRepository", invRepo);
+        org.springframework.test.util.ReflectionTestUtils.setField(controller, "inventoryTransactionRepository", txRepo);
+
+        StaffShift active = new StaffShift(
+                "sh1", "s1", "Trần Thị NV", "0911223344", "court_thanh_phat", "Sân bóng Thành Phát",
+                "24/11/2026", "Ca Sáng (06:00 - 12:00)", "Lễ tân", "ACTIVE", "06:00", null, ""
+        );
+        when(staffShiftRepository.findByStaffIdOrderByCreatedAtDesc("s1")).thenReturn(List.of(active));
+
+        InventoryItem revive = new InventoryItem(
+                "inv_rev", "court_thanh_phat", "Sân bóng Thành Phát", "Revive", "DRINK", "chai", 8500, 15000, 5, 10
+        );
+        when(invRepo.findByCourtIdAndActiveTrueOrderByNameAsc("court_thanh_phat")).thenReturn(List.of(revive));
+        when(invRepo.findById("inv_rev")).thenReturn(Optional.of(revive));
+        when(invRepo.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        // 1. Staff queries their own court inventory cleanly, blocked on foreign court
+        ResponseEntity<ApiResponse<List<Map<String, Object>>>> invList = controller.getStaffInventory("Bearer tok", null);
+        assertEquals(200, invList.getStatusCode().value());
+        assertEquals(1, invList.getBody().getData().size());
+
+        ResponseStatusException crossCourt = assertThrows(ResponseStatusException.class, () ->
+                controller.getStaffInventory("Bearer tok", "court_hoang_gia"));
+        assertEquals(403, crossCourt.getStatusCode().value());
+
+        // 2. Retail POS sale of 2 Revive deducts stock from 5 -> 3 and logs SALE transaction
+        ResponseEntity<ApiResponse<PosSale>> saleRes = controller.createRetailPosSale(
+                "Bearer tok",
+                Map.of(
+                        "itemsNote", "2x Revive",
+                        "amount", 30000,
+                        "paymentMethod", "CASH",
+                        "items", List.of(Map.of("itemId", "inv_rev", "quantity", 2))
+                )
+        );
+        assertEquals(200, saleRes.getStatusCode().value());
+        assertEquals(3, revive.getStockQuantity());
+        verify(txRepo, times(1)).save(any(InventoryTransaction.class));
+
+        // 3. Selling 4 when only 3 left throws 400 and does NOT mutate stock
+        ResponseStatusException lowStockEx = assertThrows(ResponseStatusException.class, () ->
+                controller.createRetailPosSale(
+                        "Bearer tok",
+                        Map.of(
+                                "itemsNote", "4x Revive",
+                                "amount", 60000,
+                                "paymentMethod", "CASH",
+                                "items", List.of(Map.of("itemId", "inv_rev", "quantity", 4))
+                        )
+                )
+        );
+        assertEquals(400, lowStockEx.getStatusCode().value());
+        assertEquals(3, revive.getStockQuantity());
     }
 }

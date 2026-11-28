@@ -19,6 +19,8 @@ public interface CourtHoldRepository extends JpaRepository<CourtHold, String> {
 
     Optional<CourtHold> findByBookingId(String bookingId);
 
+    Optional<CourtHold> findByRecurringPackageId(String recurringPackageId);
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT h FROM CourtHold h WHERE h.id = :id")
     Optional<CourtHold> findByIdWithLock(@Param("id") String id);

@@ -88,6 +88,7 @@ public class AuthService {
         if (userRepository.existsByPhone(phone)) {
             throw new IllegalArgumentException("Số điện thoại này đã được đăng ký.");
         }
+
     }
 
     AuthResponse createVerifiedAccount(String email, String phone, String fullName, String address,
@@ -95,14 +96,7 @@ public class AuthService {
         ensureAvailable(email, phone);
         User newUser = new User(
                 "u_" + UUID.randomUUID().toString().replace("-", "").substring(0, 10),
-                email,
-                passwordHash,
-                fullName,
-                phone,
-                address != null ? address : "",
-                dob,
-                "USER",
-                false
+                email, passwordHash, fullName, phone, address, dob, "USER", false
         );
         userRepository.save(newUser);
 

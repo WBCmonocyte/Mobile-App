@@ -81,7 +81,7 @@ fun List<TimeSlot>.mergedTimeRange(): String {
     return parts.joinToString(", ") { "${it.first} - ${it.second}" }
 }
 
-enum class PaymentMethod { QR_TRANSFER, CASH_ON_SITE }
+enum class PaymentMethod { QR_TRANSFER, CASH_ON_SITE, WALLET, CREDIT }
 
 enum class PaymentStatus(val label: String) {
     PENDING("Chờ thanh toán"),
@@ -132,4 +132,6 @@ data class Booking(
     val depositAmount: Int = 0,
     val remainingAmount: Int = 0,
     val paymentMethod: PaymentMethod = PaymentMethod.QR_TRANSFER,
+    val recurringPackageId: String? = null,
+    val recurringSessionId: String? = null,
 )

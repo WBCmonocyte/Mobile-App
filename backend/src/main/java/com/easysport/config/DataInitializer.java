@@ -18,6 +18,7 @@ import com.easysport.repository.InventoryTransactionRepository;
 import com.easysport.repository.ShiftReportRepository;
 import com.easysport.repository.StaffShiftRepository;
 import com.easysport.repository.UserRepository;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.stereotype.Component;
 
@@ -48,9 +49,21 @@ public class DataInitializer implements CommandLineRunner {
                            CourtResourceRepository courtResourceRepository,
                            BookingRepository bookingRepository,
                            StaffShiftRepository staffShiftRepository,
+                           ShiftReportRepository shiftReportRepository) {
+        this(userRepository, courtRepository, courtFieldRepository, courtResourceRepository,
+                bookingRepository, staffShiftRepository, shiftReportRepository, null, null);
+    }
+
+    @Autowired
+    public DataInitializer(UserRepository userRepository,
+                           CourtRepository courtRepository,
+                           CourtFieldRepository courtFieldRepository,
+                           CourtResourceRepository courtResourceRepository,
+                           BookingRepository bookingRepository,
+                           StaffShiftRepository staffShiftRepository,
                            ShiftReportRepository shiftReportRepository,
-                           InventoryItemRepository inventoryItemRepository,
-                           InventoryTransactionRepository inventoryTransactionRepository) {
+                           @Autowired(required = false) InventoryItemRepository inventoryItemRepository,
+                           @Autowired(required = false) InventoryTransactionRepository inventoryTransactionRepository) {
         this.userRepository = userRepository;
         this.courtRepository = courtRepository;
         this.courtFieldRepository = courtFieldRepository;
@@ -382,64 +395,66 @@ public class DataInitializer implements CommandLineRunner {
             ));
         }
 
-        // 9. Seed Inventory Items if empty
-        if (inventoryItemRepository.count() == 0) {
-            List<InventoryItem> items = Arrays.asList(
-                    new InventoryItem("inv_tp_revive", "court_thanh_phat", "Sân bóng Thành Phát",
-                            "Revive chanh muối", "DRINK", "chai", 8500, 15000, 48, 12),
-                    new InventoryItem("inv_tp_water", "court_thanh_phat", "Sân bóng Thành Phát",
-                            "Nước khoáng 500ml", "DRINK", "chai", 4000, 10000, 72, 15),
-                    new InventoryItem("inv_tp_bib", "court_thanh_phat", "Sân bóng Thành Phát",
-                            "Thuê bộ áo bib (14c)", "EQUIPMENT", "bộ", 150000, 50000, 8, 2),
-                    new InventoryItem("inv_tp_redbull", "court_thanh_phat", "Sân bóng Thành Phát",
-                            "Redbull tăng lực", "DRINK", "lon", 11000, 20000, 9, 10),
-                    new InventoryItem("inv_tp_ball", "court_thanh_phat", "Sân bóng Thành Phát",
-                            "Bóng đá số 5 Động Lực", "EQUIPMENT", "quả", 320000, 30000, 10, 3),
-                    new InventoryItem("inv_tp_socks", "court_thanh_phat", "Sân bóng Thành Phát",
-                            "Tất bóng đá chống trơn", "ACCESSORY", "đôi", 25000, 45000, 20, 5),
+        // 9. Seed Inventory Items & Transactions if empty (only when app.seed-demo=true)
+        if (inventoryItemRepository != null && inventoryTransactionRepository != null) {
+            if (inventoryItemRepository.count() == 0) {
+                List<InventoryItem> items = Arrays.asList(
+                        new InventoryItem("inv_tp_revive", "court_thanh_phat", "Sân bóng Thành Phát",
+                                "Revive chanh muối", "DRINK", "chai", 8500, 15000, 48, 12),
+                        new InventoryItem("inv_tp_water", "court_thanh_phat", "Sân bóng Thành Phát",
+                                "Nước khoáng 500ml", "DRINK", "chai", 4000, 10000, 72, 15),
+                        new InventoryItem("inv_tp_bib", "court_thanh_phat", "Sân bóng Thành Phát",
+                                "Thuê bộ áo bib (14c)", "EQUIPMENT", "bộ", 150000, 50000, 8, 2),
+                        new InventoryItem("inv_tp_redbull", "court_thanh_phat", "Sân bóng Thành Phát",
+                                "Redbull tăng lực", "DRINK", "lon", 11000, 20000, 9, 10),
+                        new InventoryItem("inv_tp_ball", "court_thanh_phat", "Sân bóng Thành Phát",
+                                "Bóng đá số 5 Động Lực", "EQUIPMENT", "quả", 320000, 30000, 10, 3),
+                        new InventoryItem("inv_tp_socks", "court_thanh_phat", "Sân bóng Thành Phát",
+                                "Tất bóng đá chống trơn", "ACCESSORY", "đôi", 25000, 45000, 20, 5),
 
-                    new InventoryItem("inv_hg_revive", "court_hoang_gia", "Sân bóng Hoàng Gia",
-                            "Revive chanh muối", "DRINK", "chai", 8500, 15000, 36, 10),
-                    new InventoryItem("inv_hg_water", "court_hoang_gia", "Sân bóng Hoàng Gia",
-                            "Nước khoáng 500ml", "DRINK", "chai", 4000, 10000, 60, 15),
-                    new InventoryItem("inv_hg_bib", "court_hoang_gia", "Sân bóng Hoàng Gia",
-                            "Thuê bộ áo bib (14c)", "EQUIPMENT", "bộ", 150000, 50000, 6, 2),
-                    new InventoryItem("inv_hg_redbull", "court_hoang_gia", "Sân bóng Hoàng Gia",
-                            "Redbull tăng lực", "DRINK", "lon", 11000, 20000, 24, 8)
-            );
-            applyInventoryMetadata(items);
-            inventoryItemRepository.saveAll(items);
+                        new InventoryItem("inv_hg_revive", "court_hoang_gia", "Sân bóng Hoàng Gia",
+                                "Revive chanh muối", "DRINK", "chai", 8500, 15000, 36, 10),
+                        new InventoryItem("inv_hg_water", "court_hoang_gia", "Sân bóng Hoàng Gia",
+                                "Nước khoáng 500ml", "DRINK", "chai", 4000, 10000, 60, 15),
+                        new InventoryItem("inv_hg_bib", "court_hoang_gia", "Sân bóng Hoàng Gia",
+                                "Thuê bộ áo bib (14c)", "EQUIPMENT", "bộ", 150000, 50000, 6, 2),
+                        new InventoryItem("inv_hg_redbull", "court_hoang_gia", "Sân bóng Hoàng Gia",
+                                "Redbull tăng lực", "DRINK", "lon", 11000, 20000, 24, 8)
+                );
+                applyInventoryMetadata(items);
+                inventoryItemRepository.saveAll(items);
 
-            inventoryTransactionRepository.saveAll(Arrays.asList(
-                    new InventoryTransaction("tx_seed_1", "inv_tp_revive", "Revive chanh muối", "court_thanh_phat",
-                            "IMPORT", 48, 48, 8500, "Nhập kho đầu kỳ (2 thùng)", "Trần Chủ Sân"),
-                    new InventoryTransaction("tx_seed_2", "inv_tp_water", "Nước khoáng 500ml", "court_thanh_phat",
-                            "IMPORT", 72, 72, 4000, "Nhập kho đầu kỳ (3 thùng)", "Trần Chủ Sân"),
-                    new InventoryTransaction("tx_seed_3", "inv_tp_redbull", "Redbull tăng lực", "court_thanh_phat",
-                            "IMPORT", 9, 9, 11000, "Tồn đầu kỳ (sắp hết, cần nhập thêm)", "Trần Chủ Sân")
-            ));
-            System.out.println(">>> Đã khởi tạo dữ liệu mẫu Kho hàng (InventoryItems & InventoryTransactions)");
-        } else {
-            List<InventoryItem> existingItems = inventoryItemRepository.findAll();
-            boolean changed = applyInventoryMetadata(existingItems);
-            if (changed) {
-                inventoryItemRepository.saveAll(existingItems);
+                inventoryTransactionRepository.saveAll(Arrays.asList(
+                        new InventoryTransaction("tx_seed_1", "inv_tp_revive", "Revive chanh muối", "court_thanh_phat",
+                                "IMPORT", 48, 48, 8500, "Nhập kho đầu kỳ (2 thùng)", "Trần Chủ Sân"),
+                        new InventoryTransaction("tx_seed_2", "inv_tp_water", "Nước khoáng 500ml", "court_thanh_phat",
+                                "IMPORT", 72, 72, 4000, "Nhập kho đầu kỳ (3 thùng)", "Trần Chủ Sân"),
+                        new InventoryTransaction("tx_seed_3", "inv_tp_redbull", "Redbull tăng lực", "court_thanh_phat",
+                                "IMPORT", 9, 9, 11000, "Tồn đầu kỳ (sắp hết, cần nhập thêm)", "Trần Chủ Sân")
+                ));
+                System.out.println(">>> Đã khởi tạo dữ liệu mẫu Kho hàng (InventoryItems & InventoryTransactions)");
+            } else {
+                List<InventoryItem> existingItems = inventoryItemRepository.findAll();
+                boolean changed = applyInventoryMetadata(existingItems);
+                if (changed) {
+                    inventoryItemRepository.saveAll(existingItems);
+                }
             }
-        }
 
-        if (inventoryTransactionRepository.count() <= 3) {
-            inventoryTransactionRepository.saveAll(Arrays.asList(
-                    new InventoryTransaction("tx_seed_sale_1", "inv_tp_revive", "Revive chanh muối", "court_thanh_phat",
-                            "SALE", -12, 48, 15000, "Bán lẻ tại quầy POS (khách đặt sân)", "Trần Thị Nhân Viên"),
-                    new InventoryTransaction("tx_seed_sale_2", "inv_tp_water", "Nước khoáng 500ml", "court_thanh_phat",
-                            "SALE", -18, 72, 10000, "Bán lẻ tại quầy POS", "Trần Thị Nhân Viên"),
-                    new InventoryTransaction("tx_seed_sale_3", "inv_tp_redbull", "Redbull tăng lực", "court_thanh_phat",
-                            "SALE", -6, 9, 20000, "Gắn vào đơn sân Sân 2", "Trần Thị Nhân Viên"),
-                    new InventoryTransaction("tx_seed_sale_4", "inv_hg_revive", "Revive chanh muối", "court_hoang_gia",
-                            "SALE", -8, 36, 15000, "Bán lẻ tại quầy POS", "Trần Thị Nhân Viên"),
-                    new InventoryTransaction("tx_seed_dmg_1", "inv_tp_water", "Nước khoáng 500ml", "court_thanh_phat",
-                            "DAMAGE", -2, 70, 4000, "Bẹp vỏ chai khi vận chuyển", "Trần Chủ Sân")
-            ));
+            if (inventoryTransactionRepository.count() <= 3) {
+                inventoryTransactionRepository.saveAll(Arrays.asList(
+                        new InventoryTransaction("tx_seed_sale_1", "inv_tp_revive", "Revive chanh muối", "court_thanh_phat",
+                                "SALE", -12, 48, 15000, "Bán lẻ tại quầy POS (khách đặt sân)", "Trần Thị Nhân Viên"),
+                        new InventoryTransaction("tx_seed_sale_2", "inv_tp_water", "Nước khoáng 500ml", "court_thanh_phat",
+                                "SALE", -18, 72, 10000, "Bán lẻ tại quầy POS", "Trần Thị Nhân Viên"),
+                        new InventoryTransaction("tx_seed_sale_3", "inv_tp_redbull", "Redbull tăng lực", "court_thanh_phat",
+                                "SALE", -6, 9, 20000, "Gắn vào đơn sân Sân 2", "Trần Thị Nhân Viên"),
+                        new InventoryTransaction("tx_seed_sale_4", "inv_hg_revive", "Revive chanh muối", "court_hoang_gia",
+                                "SALE", -8, 36, 15000, "Bán lẻ tại quầy POS", "Trần Thị Nhân Viên"),
+                        new InventoryTransaction("tx_seed_dmg_1", "inv_tp_water", "Nước khoáng 500ml", "court_thanh_phat",
+                                "DAMAGE", -2, 70, 4000, "Bẹp vỏ chai khi vận chuyển", "Trần Chủ Sân")
+                ));
+            }
         }
     }
 

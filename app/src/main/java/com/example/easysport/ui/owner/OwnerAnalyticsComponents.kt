@@ -219,6 +219,15 @@ internal fun OwnerAnalyticsScreen(
                                 Text("${qrVal.toInt().vnd()} đ", fontSize = 14.sp, fontWeight = FontWeight.Bold, color = Color(0xFF6EE7B7))
                             }
                         }
+                        if (overview.walletRevenue > 0L) {
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                text = "Thanh toán từ Ví EasySport: ${overview.walletRevenue.toInt().vnd()} đ",
+                                fontSize = 12.sp,
+                                color = Color.White.copy(alpha = 0.88f),
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
                     }
                 }
             }

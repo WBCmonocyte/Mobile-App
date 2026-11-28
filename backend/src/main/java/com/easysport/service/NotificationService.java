@@ -114,6 +114,64 @@ public class NotificationService {
                 "Xác nhận thanh toán", body, booking.getId(), dedupKey);
     }
 
+    @Transactional
+    public void createRecurringConfirmedNotif(String userId, String packageId, String courtName,
+                                              String fieldDetail, String timeRange, String startDate,
+                                              int totalSessions, String referenceBookingId) {
+        String dedupKey = "RECURRING_CONFIRMED:" + packageId;
+        String body = String.format(
+                "Gói cố định %d buổi tại %s (%s · %s, bắt đầu %s) đã được xác nhận thành công.",
+                totalSessions, courtName, fieldDetail, timeRange, startDate);
+        createNotification(userId, "RECURRING_CONFIRMED",
+                "Xác nhận lịch cố định", body, referenceBookingId, dedupKey);
+    }
+
+    @Transactional
+    public void createRecurringRescheduledNotif(String userId, String sessionId, String courtName,
+                                                String oldDate, String newDate, String timeRange,
+                                                String replacementBookingId) {
+        String dedupKey = "RECURRING_SLID:" + sessionId + ":" + newDate;
+        String body = String.format(
+                "Buổi ngày %s tại %s (%s) đã được chốt lịch bù sang ngày %s.",
+                oldDate, courtName, timeRange, newDate);
+        createNotification(userId, "RECURRING_RESCHEDULED",
+                "Đã chốt lịch bù", body, replacementBookingId, dedupKey);
+    }
+
+    @Transactional
+    public void createMakeupBookedNotif(String userId, String creditId, String courtName,
+                                        String dateLabel, String timeRange, String bookingId) {
+        String dedupKey = "MAKEUP_BOOKED:" + creditId;
+        String body = String.format(
+                "Đã đặt bù thành công tại %s (%s, ngày %s) từ quyền buổi còn dư.",
+                courtName, timeRange, dateLabel);
+        createNotification(userId, "RECURRING_MAKEUP",
+                "Đặt lịch bù thành công", body, bookingId, dedupKey);
+    }
+
+    @Transactional
+    public void createWeatherPostponeNotif(String userId, String sessionId, String courtName,
+                                           String sessionDate, String timeRange, String bookingId) {
+        String dedupKey = "WEATHER_APPROVED:" + sessionId;
+        String body = String.format(
+                "Chủ sân đã xác nhận hoãn buổi ngày %s tại %s (%s) do thời tiết. Bạn có thể chọn Trượt lịch hoặc Giữ 1 buổi còn dư trong Lịch cố định.",
+                sessionDate, courtName, timeRange);
+        createNotification(userId, "WEATHER_POSTPONED",
+                "Xác nhận hoãn do thời tiết", body, bookingId, dedupKey);
+    }
+
+    @Transactional
+    public void createWalletRefundNotif(String userId, String walletTxId, int amount,
+                                        String reason, String referenceBookingId) {
+        String dedupKey = "WALLET_REFUND:" + walletTxId;
+        String formatted = String.format("%,d đ", amount).replace(",", ".");
+        String body = String.format(
+                "Ví EasySport vừa nhận +%s (%s).",
+                formatted, reason != null && !reason.isBlank() ? reason : "Hoàn tiền đặt sân");
+        createNotification(userId, "WALLET_REFUND",
+                "Tiền đã vào Ví EasySport", body, referenceBookingId, dedupKey);
+    }
+
     /**
      * Chạy mỗi phút; tạo thông báo nhắc 2h cho booking CONFIRMED chưa bắt đầu.
      * Chỉ tạo nếu chưa có (dedup_key).

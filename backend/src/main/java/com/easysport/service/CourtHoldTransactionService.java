@@ -27,6 +27,10 @@ public class CourtHoldTransactionService {
     private final PaymentRepository paymentRepository;
     private final SepayService sepayService;
     private final Clock clock;
+    private final WalletService walletService;
+    private final RecurringPackageRepository recurringPackageRepository;
+    private final RecurringSessionRepository recurringSessionRepository;
+    private final NotificationService notificationService;
 
     public CourtHoldTransactionService(CourtRepository courtRepository,
                                        CourtFieldRepository courtFieldRepository,
@@ -37,6 +41,26 @@ public class CourtHoldTransactionService {
                                        PaymentRepository paymentRepository,
                                        SepayService sepayService,
                                        Clock clock) {
+        this(courtRepository, courtFieldRepository, courtResourceRepository,
+                courtHoldRepository, courtHoldSlotRepository, bookingRepository,
+                paymentRepository, sepayService, clock,
+                null, null, null, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public CourtHoldTransactionService(CourtRepository courtRepository,
+                                       CourtFieldRepository courtFieldRepository,
+                                       CourtResourceRepository courtResourceRepository,
+                                       CourtHoldRepository courtHoldRepository,
+                                       CourtHoldSlotRepository courtHoldSlotRepository,
+                                       BookingRepository bookingRepository,
+                                       PaymentRepository paymentRepository,
+                                       SepayService sepayService,
+                                       Clock clock,
+                                       @org.springframework.beans.factory.annotation.Autowired(required = false) WalletService walletService,
+                                       @org.springframework.beans.factory.annotation.Autowired(required = false) RecurringPackageRepository recurringPackageRepository,
+                                       @org.springframework.beans.factory.annotation.Autowired(required = false) RecurringSessionRepository recurringSessionRepository,
+                                       @org.springframework.beans.factory.annotation.Autowired(required = false) NotificationService notificationService) {
         this.courtRepository = courtRepository;
         this.courtFieldRepository = courtFieldRepository;
         this.courtResourceRepository = courtResourceRepository;
@@ -46,6 +70,10 @@ public class CourtHoldTransactionService {
         this.paymentRepository = paymentRepository;
         this.sepayService = sepayService;
         this.clock = clock;
+        this.walletService = walletService;
+        this.recurringPackageRepository = recurringPackageRepository;
+        this.recurringSessionRepository = recurringSessionRepository;
+        this.notificationService = notificationService;
     }
 
     public static class HoldResult {
@@ -80,7 +108,7 @@ public class CourtHoldTransactionService {
         CourtField field = resolveField(court, req.getFieldDetail());
         LocalDateTime now = LocalDateTime.now(clock);
         req.setDateLabel(BookingRules.parseDate(req.getDateLabel()).format(BookingRules.DATE));
-        if (!List.of("QR_TRANSFER", "CASH_ON_SITE").contains(req.getPaymentMethod()))
+        if (!List.of("QR_TRANSFER", "CASH_ON_SITE", "WALLET").contains(req.getPaymentMethod()))
             throw new IllegalArgumentException("Phương thức thanh toán không hợp lệ.");
         if (req.getIdempotencyKey() == null || req.getIdempotencyKey().isBlank() || req.getIdempotencyKey().length() > 100)
             throw new IllegalArgumentException("Thiếu hoặc sai mã yêu cầu thanh toán.");
@@ -176,6 +204,7 @@ public class CourtHoldTransactionService {
 
         // 6. Tính toán giá tiền trên máy chủ (Server-side calculation)
         String method = req.getPaymentMethod() != null ? req.getPaymentMethod().trim() : "QR_TRANSFER";
+        boolean isWallet = "WALLET".equalsIgnoreCase(method);
         String mergedTimeRange = req.getSlots().stream().collect(Collectors.joining(", "));
         SepayService.PriceResult price = sepayService.calculatePrice(court, mergedTimeRange, method);
 
@@ -184,6 +213,7 @@ public class CourtHoldTransactionService {
         // verificationDeadline = paymentDeadline + 1 phút
         LocalDateTime paymentDeadline = now.plusMinutes(5);
         LocalDateTime verificationDeadline = paymentDeadline.plusMinutes(1);
+        LocalDateTime confirmedExpiry = BookingRules.parseDate(req.getDateLabel()).plusDays(2).atStartOfDay();
 
         String holdId = "HOLD_" + UUID.randomUUID().toString().replace("-", "").substring(0, 16);
         String bookingId = "BK" + UUID.randomUUID().toString().replace("-", "");
@@ -194,6 +224,21 @@ public class CourtHoldTransactionService {
         String userId = (authenticatedUserId != null && !authenticatedUserId.isBlank())
                 ? authenticatedUserId.trim()
                 : (req.getUserId() != null && !req.getUserId().isBlank() ? req.getUserId().trim() : "user_unknown");
+
+        if (isWallet) {
+            if (walletService == null) {
+                throw new IllegalStateException("Dịch vụ Ví EasySport chưa được khởi tạo.");
+            }
+            walletService.debitWallet(
+                    userId,
+                    price.totalPrice,
+                    "DEBIT_BOOKING",
+                    "Thanh toán đặt sân " + court.getName() + " (" + req.getDateLabel().trim() + " · " + mergedTimeRange + ")",
+                    bookingId,
+                    null,
+                    "DEBIT_SINGLE:" + key
+            );
+        }
 
         CourtHold hold = new CourtHold(
                 holdId,
@@ -212,6 +257,10 @@ public class CourtHoldTransactionService {
                 verificationDeadline,
                 key
         );
+        if (isWallet) {
+            hold.setStatus("CONFIRMED");
+            hold.setConfirmedAt(now);
+        }
         courtHoldRepository.save(hold);
 
         // Lưu các slot tương ứng cho từng tài nguyên vật lý.
@@ -227,15 +276,17 @@ public class CourtHoldTransactionService {
                         interval.startMinute,
                         interval.endMinute,
                         interval.originalLabel,
-                        "AWAITING_PAYMENT",
-                        verificationDeadline
+                        isWallet ? "CONFIRMED" : "AWAITING_PAYMENT",
+                        isWallet ? confirmedExpiry : verificationDeadline
                 );
                 courtHoldSlotRepository.save(slot);
             }
         }
 
-        // Tạo Booking trạng thái PENDING
+        // Tạo Booking trạng thái PENDING (hoặc PAID ngay nếu thanh toán bằng Ví)
         String address = court.getAddress() != null && !court.getAddress().isBlank() ? court.getAddress() : req.getAddress();
+        int initialDeposit = isWallet ? price.totalPrice : price.depositAmount;
+        int initialRemaining = isWallet ? 0 : price.remainingAmount;
         Booking booking = new Booking(
                 bookingId,
                 userId,
@@ -245,18 +296,18 @@ public class CourtHoldTransactionService {
                 mergedTimeRange,
                 req.getDateLabel().trim(),
                 price.totalPrice,
-                price.depositAmount,
-                price.remainingAmount,
+                initialDeposit,
+                initialRemaining,
                 method,
-                "PENDING",
+                isWallet ? "PAID" : "PENDING",
                 req.getCustomerName(),
                 req.getCustomerPhone(),
                 address,
-                verificationDeadline
+                isWallet ? confirmedExpiry : verificationDeadline
         );
         bookingRepository.save(booking);
 
-        // Tạo Payment trạng thái PENDING
+        // Tạo Payment
         int onlineAmount = "CASH_ON_SITE".equalsIgnoreCase(method) ? price.depositAmount : price.totalPrice;
         Payment payment = new Payment(
                 paymentId,
@@ -268,7 +319,16 @@ public class CourtHoldTransactionService {
                 checkoutToken,
                 paymentDeadline
         );
+        if (isWallet) {
+            payment.setStatus("PAID");
+            payment.setConfirmedAmount(onlineAmount);
+            payment.setConfirmedAt(now);
+        }
         paymentRepository.save(payment);
+
+        if (isWallet && notificationService != null) {
+            notificationService.createBookingConfirmedNotif(booking);
+        }
 
         return new HoldResult(hold, booking, payment, court, false);
     }
@@ -300,7 +360,9 @@ public class CourtHoldTransactionService {
                 }
                 courtHoldSlotRepository.saveAll(slots);
 
-                if (hold.getBookingId() != null) {
+                if (hold.getRecurringPackageId() != null) {
+                    syncRecurringLifecycle(hold.getRecurringPackageId(), "RELEASED", "CANCELLED");
+                } else if (hold.getBookingId() != null) {
                     bookingRepository.findById(hold.getBookingId()).ifPresent(b -> {
                         if ("PENDING".equalsIgnoreCase(b.getStatus())) {
                             b.setStatus("CANCELLED");
@@ -336,7 +398,9 @@ public class CourtHoldTransactionService {
                 }
                 courtHoldSlotRepository.saveAll(slots);
 
-                if (hold.getBookingId() != null) {
+                if (hold.getRecurringPackageId() != null) {
+                    syncRecurringLifecycle(hold.getRecurringPackageId(), "EXPIRED", "EXPIRED");
+                } else if (hold.getBookingId() != null) {
                     bookingRepository.findById(hold.getBookingId()).ifPresent(b -> {
                         if ("PENDING".equalsIgnoreCase(b.getStatus())) {
                             b.setStatus("EXPIRED");
@@ -345,6 +409,33 @@ public class CourtHoldTransactionService {
                         }
                     });
                 }
+            }
+        }
+    }
+
+    private void syncRecurringLifecycle(String packageId, String packageAndSessionStatus, String bookingStatus) {
+        if (recurringPackageRepository != null) {
+            recurringPackageRepository.findById(packageId).ifPresent(pkg -> {
+                if ("AWAITING_PAYMENT".equalsIgnoreCase(pkg.getStatus())) {
+                    pkg.setStatus(packageAndSessionStatus);
+                    recurringPackageRepository.save(pkg);
+                }
+            });
+        }
+        if (recurringSessionRepository != null) {
+            List<RecurringSession> sessions = recurringSessionRepository.findByPackageIdOrderBySessionIndexAsc(packageId);
+            for (RecurringSession rs : sessions) {
+                if ("PENDING_PAYMENT".equalsIgnoreCase(rs.getStatus())) {
+                    rs.setStatus(packageAndSessionStatus);
+                    recurringSessionRepository.save(rs);
+                }
+            }
+        }
+        for (Booking b : bookingRepository.findByRecurringPackageId(packageId)) {
+            if ("PENDING".equalsIgnoreCase(b.getStatus())) {
+                b.setStatus(bookingStatus);
+                b.setPayment(bookingStatus);
+                bookingRepository.save(b);
             }
         }
     }

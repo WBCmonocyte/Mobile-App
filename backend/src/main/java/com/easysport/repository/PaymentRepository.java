@@ -16,6 +16,7 @@ public interface PaymentRepository extends JpaRepository<Payment, String> {
     Optional<Payment> findByCheckoutToken(String checkoutToken);
     Optional<Payment> findBySepayTransactionId(String sepayTransactionId);
     List<Payment> findByBookingIdOrderByCreatedAtDesc(String bookingId);
+    List<Payment> findByRecurringPackageIdOrderByCreatedAtDesc(String recurringPackageId);
     boolean existsBySepayTransactionId(String sepayTransactionId);
 }
 

@@ -299,10 +299,14 @@ public class ShiftPlanningService {
     }
 
     public Map<String, Object> buildWeekSchedule(LocalDate requestedWeekStart) {
-        return buildWeekSchedule(requestedWeekStart, null);
+        return buildWeekSchedule(requestedWeekStart, null, null);
     }
 
     public Map<String, Object> buildWeekSchedule(LocalDate requestedWeekStart, String courtIdFilter) {
+        return buildWeekSchedule(requestedWeekStart, courtIdFilter, null);
+    }
+
+    public Map<String, Object> buildWeekSchedule(LocalDate requestedWeekStart, String courtIdFilter, Set<String> allowedCourtIds) {
         LocalDate weekStart = weekStartOf(requestedWeekStart);
         LocalDate weekEnd = weekStart.plusDays(6);
         LocalDate today = LocalDate.now(clock);
@@ -313,7 +317,9 @@ public class ShiftPlanningService {
         }
 
         boolean filterByCourt = courtIdFilter != null && !courtIdFilter.isBlank() && !"ALL".equalsIgnoreCase(courtIdFilter);
+        boolean filterByAllowed = allowedCourtIds != null && !allowedCourtIds.isEmpty();
         List<StaffShift> weekShifts = staffShiftRepository.findByShiftDateIn(weekDates).stream()
+                .filter(s -> !filterByAllowed || s.getCourtId() == null || allowedCourtIds.contains(s.getCourtId()))
                 .filter(s -> !filterByCourt || courtIdFilter.equals(s.getCourtId()))
                 .toList();
         List<User> staffUsers = userRepository.findByRole("STAFF");

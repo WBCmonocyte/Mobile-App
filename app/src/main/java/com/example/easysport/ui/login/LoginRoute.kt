@@ -1,10 +1,11 @@
 package com.example.easysport.ui.login
 
-import android.widget.Toast
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 
@@ -16,7 +17,10 @@ fun LoginRoute(
     viewModel: LoginViewModel = viewModel(factory = LoginViewModelFactory()),
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
-    val context = LocalContext.current
+    var resetting by remember { mutableStateOf(false) }
+    if (resetting) {
+        PasswordResetDialog(onClose = { resetting = false })
+    }
 
     LaunchedEffect(uiState.loggedInUser) {
         val user = uiState.loggedInUser
@@ -30,7 +34,7 @@ fun LoginRoute(
         onSignIn = viewModel::login,
         onForgotPassword = {
             onForgotPassword()
-            Toast.makeText(context, "Tính năng Quên mật khẩu đang được phát triển", Toast.LENGTH_SHORT).show()
+            resetting = true
         },
         onSignUp = onSignUp,
         isLoading = uiState.isLoading,

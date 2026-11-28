@@ -3,6 +3,7 @@ package com.example.easysport.ui.home
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -14,9 +15,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowForward
+import androidx.compose.material.icons.outlined.AccountBalanceWallet
 import androidx.compose.material.icons.outlined.CalendarMonth
 import androidx.compose.material.icons.outlined.ChevronLeft
 import androidx.compose.material.icons.outlined.ChevronRight
+import androidx.compose.material.icons.outlined.EventRepeat
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.LocationOn
 import androidx.compose.material.icons.outlined.Map
@@ -32,6 +35,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -84,6 +88,8 @@ fun HomeScreen(
     onTabSelected: (HomeTab) -> Unit = {},
     onOpenMap: (String?) -> Unit = { onTabSelected(HomeTab.MAP) },
     onOpenProfile: () -> Unit = { onTabSelected(HomeTab.ACCOUNT) },
+    onOpenWallet: () -> Unit = {},
+    onOpenRecurring: () -> Unit = {},
 ) {
     val context = LocalContext.current
     var selectedSport by remember { mutableStateOf(SPORTS[0]) }
@@ -133,6 +139,48 @@ fun HomeScreen(
 
             Spacer(Modifier.height(24.dp))
             BookBanner(onBookCourt)
+
+            Spacer(Modifier.height(12.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Surface(
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(14.dp),
+                    color = EsColors.SurfaceTint,
+                    border = BorderStroke(1.dp, EsColors.Primary.copy(alpha = 0.2f)),
+                    onClick = onOpenRecurring,
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(Icons.Outlined.EventRepeat, contentDescription = null, tint = EsColors.Primary, modifier = Modifier.size(20.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Column {
+                            Text("Lịch cố định", fontWeight = FontWeight.Bold, fontSize = 13.5.sp, color = EsColors.Title)
+                            Text("Gói 3 tháng · 12 buổi", fontSize = 11.5.sp, color = EsColors.Body)
+                        }
+                    }
+                }
+                Surface(
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(14.dp),
+                    color = EsColors.SuccessBg,
+                    border = BorderStroke(1.dp, EsColors.Success.copy(alpha = 0.25f)),
+                    onClick = onOpenWallet,
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(Icons.Outlined.AccountBalanceWallet, contentDescription = null, tint = EsColors.Success, modifier = Modifier.size(20.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Column {
+                            Text("Ví EasySport", fontWeight = FontWeight.Bold, fontSize = 13.5.sp, color = EsColors.Title)
+                            Text("Số dư & hoàn tiền", fontSize = 11.5.sp, color = EsColors.Body)
+                        }
+                    }
+                }
+            }
 
             Spacer(Modifier.height(16.dp))
             SportChips(

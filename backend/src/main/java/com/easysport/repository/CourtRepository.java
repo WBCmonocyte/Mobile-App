@@ -11,4 +11,5 @@ public interface CourtRepository extends JpaRepository<Court, String> {
     @org.springframework.data.jpa.repository.Query("SELECT c FROM Court c WHERE c.id = :id")
     java.util.Optional<Court> lockById(@org.springframework.data.repository.query.Param("id") String id);
     List<Court> findByNameContainingIgnoreCase(String name);
+    List<Court> findByOwnerId(String ownerId);
 }

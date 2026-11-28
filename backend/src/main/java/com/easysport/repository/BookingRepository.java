@@ -11,4 +11,5 @@ public interface BookingRepository extends JpaRepository<Booking, String> {
     List<Booking> findByUserIdOrderByCreatedAtDesc(String userId);
     List<Booking> findAllByOrderByCreatedAtDesc();
     List<Booking> findByStatus(String status);
+    List<Booking> findByRecurringPackageId(String recurringPackageId);
 }

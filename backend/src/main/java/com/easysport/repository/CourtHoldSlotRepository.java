@@ -14,6 +14,8 @@ public interface CourtHoldSlotRepository extends JpaRepository<CourtHoldSlot, St
 
     List<CourtHoldSlot> findByHoldId(String holdId);
 
+    List<CourtHoldSlot> findByHoldIdAndDateLabel(String holdId, String dateLabel);
+
     /**
      * Tìm kiếm các slot đang xung đột:
      * Cùng tài nguyên, cùng ngày, trạng thái BOOKED/CONFIRMED hoặc HELD/AWAITING_PAYMENT/VERIFYING_PAYMENT chưa hết hạn (expiresAt > now),
